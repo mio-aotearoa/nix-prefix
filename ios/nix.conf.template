@@ -1,0 +1,41 @@
+# Nix configuration for rootless jailbroken iOS
+# Location: /var/jb/nix/etc/nix/nix.conf
+#
+# Layout:
+#   NIX_PREFIX=/var/jb/nix
+#   NIX_STORE_DIR=/var/jb/nix/store
+#   NIX_STATE_DIR=/var/jb/nix/var
+#   NIX_CONF_DIR=/var/jb/nix/etc
+#
+# /nix on the system root is impossible under Signed System Volume (SSV).
+# /var/jb is a symlink into /private/preboot/... — keep allow-symlinked-store on.
+
+# Single-user mode
+build-users-group =
+
+# Sandbox is not usable like on NixOS/macOS here
+sandbox = false
+
+# /var/jb → preboot symlink
+allow-symlinked-store = true
+
+# Build settings
+max-jobs = auto
+cores = 0
+
+# Custom store prefix: no official binary cache
+substituters =
+trusted-public-keys =
+
+# Optional private cache:
+# substituters = https://your-cache.example.com
+# trusted-public-keys = your-cache.example.com:base64encodedkey
+
+# experimental-features = nix-command flakes
+
+keep-build-log = true
+keep-failed = false
+auto-optimise-store = true
+
+# min-free = 1073741824
+# max-free = 3221225472
