@@ -53,17 +53,22 @@ let
   # Note: We only configure Nix itself. Other packages are built normally
   # and will be patched by patchelf in the installer.
   nixBoot = let
-    nixComponents = pkgs.nixVersions.nixComponents_2_31;
-    
+    # Channel removed nixComponents_2_31; keep in sync with available nixVersions.
+    nixComponents = pkgs.nixVersions.nixComponents_2_34;
+
+    # Modular nix: only nix-store defines store-dir / localstatedir / sysconfdir.
     nixComponentsWithCustomPaths = nixComponents.overrideAllMesonComponents (finalAttrs: prevAttrs: {
-      mesonFlags = (prevAttrs.mesonFlags or []) ++ [
-        (lib.mesonOption "libstore:store-dir" storeDir)
-        (lib.mesonOption "libstore:localstatedir" stateDir)
-        (lib.mesonOption "libstore:sysconfdir" confDir)
-      ];
+      mesonFlags =
+        (prevAttrs.mesonFlags or [])
+        ++ lib.optionals ((prevAttrs.pname or "") == "nix-store") [
+          (lib.mesonOption "store-dir" storeDir)
+          (lib.mesonOption "localstatedir" stateDir)
+          (lib.mesonOption "sysconfdir" confDir)
+        ];
     });
   in
-  nixComponentsWithCustomPaths.nix-everything;
+  # nix-everything pulls store tests that assume /nix/store; use the CLI package.
+  nixComponentsWithCustomPaths.nix-cli;
   
   # Collect all stdenv bootstrap stages to avoid rebuilding toolchains
   # This recursively walks back through the stdenv bootstrap process

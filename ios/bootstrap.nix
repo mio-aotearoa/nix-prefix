@@ -37,18 +37,24 @@ let
   mkNixBoot =
     targetPkgs:
     let
-      nixComponents = targetPkgs.nixVersions.nixComponents_2_31;
+      # Channel removed nixComponents_2_31; keep in sync with available nixVersions.
+      nixComponents = targetPkgs.nixVersions.nixComponents_2_34;
+      # Modular nix: only the nix-store (libstore) component defines store-dir /
+      # localstatedir / sysconfdir. Passing them to libutil etc. fails configure.
       nixComponentsWithCustomPaths = nixComponents.overrideAllMesonComponents (
         _final: prev: {
-          mesonFlags = (prev.mesonFlags or [ ]) ++ [
-            (targetPkgs.lib.mesonOption "libstore:store-dir" storeDir)
-            (targetPkgs.lib.mesonOption "libstore:localstatedir" stateDir)
-            (targetPkgs.lib.mesonOption "libstore:sysconfdir" confDir)
-          ];
+          mesonFlags =
+            (prev.mesonFlags or [ ])
+            ++ targetPkgs.lib.optionals ((prev.pname or "") == "nix-store") [
+              (targetPkgs.lib.mesonOption "store-dir" storeDir)
+              (targetPkgs.lib.mesonOption "localstatedir" stateDir)
+              (targetPkgs.lib.mesonOption "sysconfdir" confDir)
+            ];
         }
       );
     in
-    nixComponentsWithCustomPaths.nix-everything;
+    # nix-everything pulls store tests that assume /nix/store; use the CLI package.
+    nixComponentsWithCustomPaths.nix-cli;
 
   # First slice: host Nix with /var/jb paths baked in (develop rewrite/install).
   # Swap rootPaths to (mkNixBoot iosPkgs) and iosPkgs.* when iOS cross of Nix works.
@@ -261,6 +267,20 @@ let
     echo "  Patched: $PATCHED"
     echo "  Unchanged/skipped: $SKIPPED"
     echo ""
+
+    LEFT=0
+    while IFS= read -r -d $'\0' f; do
+      FT=$(file -b "$f" 2>/dev/null || true)
+      case "$FT" in *Mach-O*) ;; *) continue ;; esac
+      if otool -L "$f" 2>/dev/null | awk '{print $1}' | grep -q '^/nix/store/'; then
+        LEFT=$((LEFT + 1))
+      fi
+    done < <(find store -type f -print0)
+    echo "  Remaining Mach-O with /nix/store load cmds: $LEFT"
+    if [ "$LEFT" -gt 0 ]; then
+      echo "ERROR: absolute /nix/store load-command refs remain after rewrite."
+      exit 1
+    fi
   '';
 
   envScript = pkgs.writeText "ios-nix-env.sh" (builtins.readFile ./ios-nix-env.sh);
@@ -294,6 +314,9 @@ let
               storePath=$(basename "$path")
               cp -rL "$path" "store/$storePath"
             done
+
+            # Store objects are read-only; install_name_tool needs writable files+dirs
+            chmod -R u+w store
 
             ${rewriteMachOInstallNames}
 
