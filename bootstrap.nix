@@ -1,393 +1,326 @@
 # Bootstrap Nix for Termux with custom prefix
-# 
+#
 # References:
 # - https://dram.page/p/bootstrapping-nix/ (bootstrap approach)
 #
-# Created with assistance from Claude Sonnet 4.5
-#
 # This builds a Nix installation for /data/data/com.termux/files/nix
-# Targeting: aarch64-linux NATIVE builds only
-#
-# IMPORTANT: This must be built ON an aarch64 system (aarch64 NixOS or GitHub Actions aarch64 runner)
+# Targeting: multiple architectures for Termux
 #
 # Approach: Build for /nix/store, then use patchelf to rewrite interpreter paths.
-# This avoids the complexity of multi-stage bootstrapping while ensuring binaries
-# work correctly with the custom store directory.
 #
 # Usage:
-#   nix-build bootstrap.nix -A installer
-
-{ pkgs ? import <nixpkgs> {} }:
-
-# CRITICAL UNDERSTANDING: Store Directory and ELF Interpreter Paths
-# 
-# The store directory is HARDCODED in the Nix binary itself.
-# ELF interpreter paths are ABSOLUTE: /nix/store/xxx-glibc/lib/ld-linux-aarch64.so.1
+#   nix-build bootstrap.nix -A installer.aarch64
+#   nix-build bootstrap.nix -A installer.armv7l --arg crossSystem '{ config = "armv7l-unknown-linux-gnueabihf"; }'
 #
-# SOLUTION: Build natively on aarch64, then use patchelf to rewrite interpreter paths.
-#
-# Since we're building NATIVELY on aarch64:
-# 1. All binaries are aarch64 (no cross-compilation issues)
-# 2. We build for /nix/store normally
-# 3. Use patchelf to rewrite: /nix/store → /data/data/com.termux/files/nix/store
-# 4. Package everything into a tarball
+# Or via ./build.sh -a <arch>
+
+{
+  crossSystem ? null,
+  system ? builtins.currentSystem,
+  nixpkgs ? <nixpkgs>,
+  # Re-evaluated with crossSystem when --arg crossSystem=... is passed
+  pkgs ? import nixpkgs { inherit system crossSystem; },
+}:
 
 with pkgs;
 
 let
-  # Verify we're on aarch64
-  _ = assert builtins.currentSystem == "aarch64-linux"; builtins.trace "Building natively on aarch64-linux" true;
-    
-  storeDir = "/data/data/com.termux/files/nix/store";
-in
+  supportedArchs = {
+    aarch64 = {
+      targetPlatform = "aarch64-unknown-linux-gnu";
+      name = "aarch64";
+    };
+    armv7l = {
+      targetPlatform = "armv7l-unknown-linux-gnueabihf";
+      name = "armv7l";
+    };
+    x86_64 = {
+      targetPlatform = "x86_64-unknown-linux-gnu";
+      name = "x86_64";
+    };
+    i686 = {
+      targetPlatform = "i686-unknown-linux-gnu";
+      name = "i686";
+    };
+  };
 
-let
-  # Target directories for Termux  
-  termuxPrefix = "/data/data/com.termux/files";
-  nixPrefix = "${termuxPrefix}/nix";
-  storeDir = "${nixPrefix}/store";
-  stateDir = "${nixPrefix}/var";
-  confDir = "${nixPrefix}/etc";
-  
-  # Build Nix configured for custom store paths
-  # Note: We only configure Nix itself. Other packages are built normally
-  # and will be patched by patchelf in the installer.
-  nixBoot = let
-    # Channel removed nixComponents_2_31; keep in sync with available nixVersions.
-    nixComponents = pkgs.nixVersions.nixComponents_2_34;
+  makeInstaller =
+    { targetPlatform, name }:
+    let
+      termuxPrefix = "/data/data/com.termux/files";
+      nixPrefix = "${termuxPrefix}/nix";
+      storeDir = "${nixPrefix}/store";
+      stateDir = "${nixPrefix}/var";
+      confDir = "${nixPrefix}/etc";
 
-    # Modular nix: only nix-store defines store-dir / localstatedir / sysconfdir.
-    nixComponentsWithCustomPaths = nixComponents.overrideAllMesonComponents (finalAttrs: prevAttrs: {
-      mesonFlags =
-        (prevAttrs.mesonFlags or [])
-        ++ lib.optionals ((prevAttrs.pname or "") == "nix-store") [
-          (lib.mesonOption "store-dir" storeDir)
-          (lib.mesonOption "localstatedir" stateDir)
-          (lib.mesonOption "sysconfdir" confDir)
+      nixBoot =
+        let
+          # Channel removed nixComponents_2_31; keep in sync with available nixVersions.
+          nixComponents = pkgs.nixVersions.nixComponents_2_34;
+
+          # Modular nix: only nix-store defines store-dir / localstatedir / sysconfdir.
+          nixComponentsWithCustomPaths = nixComponents.overrideAllMesonComponents (
+            _final: prev: {
+              mesonFlags =
+                (prev.mesonFlags or [ ])
+                ++ lib.optionals ((prev.pname or "") == "nix-store") [
+                  (lib.mesonOption "store-dir" storeDir)
+                  (lib.mesonOption "localstatedir" stateDir)
+                  (lib.mesonOption "sysconfdir" confDir)
+                ];
+            }
+          );
+        in
+        # nix-everything pulls store tests that assume /nix/store; use the CLI package.
+        nixComponentsWithCustomPaths.nix-cli;
+
+      collectStdenvStages =
+        curStage:
+        [ curStage ]
+        ++ (
+          if (curStage ? __bootPackages) && !(curStage.__bootPackages.__raw or false) then
+            collectStdenvStages curStage.__bootPackages.stdenv
+          else
+            [ ]
+        );
+
+      allStdenvStages = collectStdenvStages pkgs.stdenv;
+
+      nixClosure = pkgs.closureInfo {
+        rootPaths = [
+          nixBoot
+        ]
+        ++ allStdenvStages
+        ++ [
+          pkgs.bashInteractive
+          pkgs.coreutils
+          pkgs.findutils
+          pkgs.gnugrep
+          pkgs.gnused
+          pkgs.gawk
+          pkgs.gnutar
+          pkgs.gzip
+          pkgs.xz
+          pkgs.bzip2
+          pkgs.curl
+          pkgs.wget
+          pkgs.git
+          pkgs.cacert
+          pkgs.gnumake
+          pkgs.patch
+          pkgs.diffutils
+          pkgs.which
+          pkgs.patchelf
+          pkgs.file
+          pkgs.less
+          pkgs.nano
         ];
-    });
-  in
-  # nix-everything pulls store tests that assume /nix/store; use the CLI package.
-  nixComponentsWithCustomPaths.nix-cli;
-  
-  # Collect all stdenv bootstrap stages to avoid rebuilding toolchains
-  # This recursively walks back through the stdenv bootstrap process
-  #
-  # Why we do this: Each stdenv stage depends on previous stages to build the toolchain.
-  # By including all stages in our tarball, we ensure users never need to rebuild:
-  # - gcc and the C compiler
-  # - glibc/musl and system libraries  
-  # - binutils (ld, as, ar, etc.)
-  # - Basic bootstrap tools
-  #
-  # The tradeoff is a larger tarball (~1-2 GB), but this saves hours of compilation
-  # time for users and makes the installation much more self-contained.
-  collectStdenvStages = curStage:
-    [ curStage ] ++
-    (if (curStage ? __bootPackages) && !(curStage.__bootPackages.__raw or false)
-     then collectStdenvStages curStage.__bootPackages.stdenv
-     else []);
-  
-  # All the stdenv stages from final back to stage 0
-  allStdenvStages = collectStdenvStages pkgs.stdenv;
-  
-  # Closure info for creating the tarball
-  # closureInfo computes the complete dependency closure (all transitive dependencies)
-  # and generates a registration database that nix-store can import.
-  nixClosure = pkgs.closureInfo {
-    rootPaths = [ nixBoot ] ++ allStdenvStages ++ [
-      # Essential tools for Termux environment
-      pkgs.bashInteractive
-      pkgs.coreutils
-      pkgs.findutils
-      pkgs.gnugrep
-      pkgs.gnused
-      pkgs.gawk
-      pkgs.gnutar
-      pkgs.gzip
-      pkgs.xz
-      pkgs.bzip2
-      pkgs.curl
-      pkgs.wget
-      pkgs.git
-      pkgs.cacert
-      
-      # Useful build tools
-      pkgs.gnumake
-      pkgs.patch
-      pkgs.diffutils
-      pkgs.which
-      
-      # For fixing ELF interpreter paths
-      pkgs.patchelf
-      pkgs.file
-      
-      # For convenience
-      pkgs.less
-      pkgs.nano
-    ];
-  };
-  
-  # Installer script
-  installerScript = pkgs.writeScript "install.sh" ''
-    #!/bin/sh
-    set -e
-    
-    TERMUX_PREFIX="${termuxPrefix}"
-    NIX_PREFIX="${nixPrefix}"
-    STORE_DIR="${storeDir}"
-    STATE_DIR="${stateDir}"
-    CONF_DIR="${confDir}"
-    
-    echo "======================================"
-    echo "Nix Installer for Termux (aarch64)"
-    echo "======================================"
-    echo ""
-    echo "Target prefix: $NIX_PREFIX"
-    echo "Store directory: $STORE_DIR"
-    echo "State directory: $STATE_DIR"
-    echo "Config directory: $CONF_DIR"
-    echo ""
-    
-    # Check if we're on the right architecture
-    ARCH=$(uname -m)
-    if [ "$ARCH" != "aarch64" ]; then
-      echo "ERROR: This installer is for aarch64 only. Detected: $ARCH"
-      exit 1
-    fi
-    
-    # Check if running on Android/Termux
-    if [ ! -d "$TERMUX_PREFIX" ]; then
-      echo "WARNING: $TERMUX_PREFIX not found. Are you running this in Termux?"
-      echo "Press Ctrl+C to cancel, or Enter to continue anyway..."
-      read
-    fi
-    
-    echo "Creating directories..."
-    
-    # If reinstalling, make existing store writable and remove it
-    if [ -d "$STORE_DIR" ]; then
-      echo "Existing store found. Removing old installation..."
-      chmod -R u+w "$STORE_DIR" 2>/dev/null || true
-      rm -rf "$STORE_DIR"
-    fi
-    
-    mkdir -p "$STORE_DIR"
-    mkdir -p "$STATE_DIR/nix/db"
-    mkdir -p "$STATE_DIR/nix/gcroots"
-    mkdir -p "$STATE_DIR/nix/profiles"
-    mkdir -p "$STATE_DIR/nix/temproots"
-    mkdir -p "$CONF_DIR/nix"
-    
-    echo "Copying store paths..."
-    echo "(ELF interpreter paths have been pre-patched during build)"
-    cp -r ./store/* "$STORE_DIR/" || true
-    
-    echo "Initializing Nix database..."
-    if [ -f ./registration ]; then
-      # Find the nix-store binary in the store
-      NIX_STORE_BIN=$(find "$STORE_DIR" -name "nix-store" -type f | head -n 1)
-      if [ -n "$NIX_STORE_BIN" ]; then
-        # Set up minimal environment for nix-store
-        export NIX_STORE_DIR="$STORE_DIR"
-        export NIX_STATE_DIR="$STATE_DIR"
-        export NIX_CONF_DIR="$CONF_DIR"
-        
-        "$NIX_STORE_BIN" --load-db < ./registration
-        echo "Database initialized successfully."
-      else
-        echo "WARNING: Could not find nix-store binary. Database not initialized."
-      fi
-    fi
-    
-    echo "Creating default profile..."
-    # Find the nix binary
-    NIX_BIN=$(find "$STORE_DIR" -path "*/bin/nix" -type f | head -n 1)
-    if [ -n "$NIX_BIN" ]; then
-      export NIX_STORE_DIR="$STORE_DIR"
-      export NIX_STATE_DIR="$STATE_DIR"
-      export NIX_CONF_DIR="$CONF_DIR"
-      
-      # Create profile directory if it doesn't exist
-      mkdir -p "$STATE_DIR/nix/profiles/per-user/$USER"
-      
-      # Set up the default profile link
-      ln -sf "$STATE_DIR/nix/profiles/per-user/$USER/profile" "$STATE_DIR/nix/profiles/default" || true
-    fi
-    
-    echo "Creating nix.conf..."
-    cat > "$CONF_DIR/nix/nix.conf" << 'EOF'
-# Nix configuration for Termux
-build-users-group =
-sandbox = false
-max-jobs = auto
-cores = 0
+      };
 
-# Disable substituters by default (no binary cache for custom prefix)
-substituters =
-trusted-public-keys =
+      installerScript = pkgs.writeScript "install.sh" ''
+                #!/bin/sh
+                set -e
 
-# Store paths configuration
-store = ${storeDir}
-state = ${stateDir}
-EOF
-    
-    echo ""
-    echo "======================================"
-    echo "Installation complete!"
-    echo "======================================"
-    echo ""
-    echo "IMPORTANT: This Nix uses environment variable overrides."
-    echo "No rebuild was needed thanks to NIX_STORE_DIR support!"
-    echo ""
-    echo "To use Nix, add the following to your ~/.bashrc or ~/.zshrc:"
-    echo ""
-    echo "  export NIX_STORE_DIR=\"$STORE_DIR\""
-    echo "  export NIX_STATE_DIR=\"$STATE_DIR\""
-    echo "  export NIX_CONF_DIR=\"$CONF_DIR\""
-    echo "  export PATH=\"$STATE_DIR/nix/profiles/default/bin:\$PATH\""
-    echo ""
-    echo "Then run: source ~/.bashrc  (or ~/.zshrc)"
-    echo ""
-    echo "To install packages, you'll need to build from source since"
-    echo "binary caches are for /nix/store, not custom paths."
-    echo ""
-  '';
-  
-  # Build the installer tarball
-  # Use buildPackages for tools that run during build (on the build platform)
-  installer = pkgs.stdenv.mkDerivation {
-    name = "nix-termux-installer";
-    nativeBuildInputs = with pkgs.buildPackages; [ 
-      gnutar 
-      gzip 
-      coreutils 
-      patchelf 
-      file 
-    ];
-    
-    buildCommand = ''
-      mkdir -p $out/tarball
-      cd $out/tarball
-      
-      # Copy all store paths
-      mkdir -p store
-      echo "Copying store paths..."
-      for path in $(cat ${nixClosure}/store-paths); do
-        echo "  Copying: $path"
-        # Strip the /nix/store prefix and copy to our store directory
-        storePath=$(basename "$path")
-        cp -rL "$path" "store/$storePath"
-      done
-      
-      echo ""
-      echo "Patching ELF interpreter paths..."
-      echo "Rewriting /nix/store -> ${storeDir} in all binaries"
-      echo ""
-      
-      PATCHED_COUNT=0
-      TOTAL_ELF=0
-      SKIPPED_COUNT=0
-      
-      # Find all ELF executables and patch them
-      while IFS= read -r file; do
-        # Check if it's an ELF file with interpreter
-        FILE_TYPE=$(file "$file" 2>/dev/null || echo "")
-        if echo "$FILE_TYPE" | grep -q "ELF.*interpreter"; then
-          TOTAL_ELF=$((TOTAL_ELF + 1))
-          
-          # Get the interpreter path
-          INTERP=$(patchelf --print-interpreter "$file" 2>/dev/null || true)
-          
-          if [ -n "$INTERP" ] && echo "$INTERP" | grep -q "^/nix/store"; then
-            # Calculate the new interpreter path
-            NEW_INTERP=$(echo "$INTERP" | sed 's|^/nix/store|${storeDir}|')
-            
-            # Extract relative path to check if interpreter exists
-            INTERP_RELATIVE=$(echo "$INTERP" | sed 's|^/nix/store/||')
-            
-            if [ -f "store/$INTERP_RELATIVE" ] || [ -L "store/$INTERP_RELATIVE" ]; then
-              # Patch the interpreter
-              if patchelf --set-interpreter "$NEW_INTERP" "$file" 2>/dev/null; then
-                PATCHED_COUNT=$((PATCHED_COUNT + 1))
-                if [ $PATCHED_COUNT -le 10 ]; then
-                  echo "  ✓ $(basename $file): $NEW_INTERP"
-                elif [ $PATCHED_COUNT -eq 11 ]; then
-                  echo "  ... (showing first 10, continuing silently)"
+                TERMUX_PREFIX="${termuxPrefix}"
+                NIX_PREFIX="${nixPrefix}"
+                STORE_DIR="${storeDir}"
+                STATE_DIR="${stateDir}"
+                CONF_DIR="${confDir}"
+                EXPECTED_ARCH="${name}"
+
+                echo "======================================"
+                echo "Nix Installer for Termux ($EXPECTED_ARCH)"
+                echo "======================================"
+                echo ""
+                echo "Target prefix: $NIX_PREFIX"
+                echo "Store directory: $STORE_DIR"
+                echo ""
+
+                ARCH=$(uname -m)
+                if [ "$ARCH" != "$EXPECTED_ARCH" ]; then
+                  echo "ERROR: This installer is for $EXPECTED_ARCH only. Detected: $ARCH"
+                  exit 1
                 fi
-              fi
-            else
-              SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
-              if [ $SKIPPED_COUNT -le 3 ]; then
-                echo "  ⚠ Skipped $(basename $file): interpreter not in closure"
-              fi
-            fi
-          fi
-        fi
-      done < <(find store -type f -executable)
-      
-      echo ""
-      echo "Results:"
-      echo "  Total files checked: $TOTAL_CHECKED"
-      echo "  ELF files with interpreter: $ELF_WITH_INTERP"
-      echo "  Successfully patched: $PATCHED_COUNT"
-      if [ $SKIPPED_COUNT -gt 0 ]; then
-        echo "  Skipped (interpreter not in closure): $SKIPPED_COUNT"
-      fi
-      
-      if [ $PATCHED_COUNT -eq 0 ] && [ $ELF_WITH_INTERP -gt 0 ]; then
-        echo ""
-        echo "ERROR: Found ELF files with interpreters but patched none!"
-        echo "This likely means the patching logic has a bug."
-        exit 1
-      fi
-      echo ""
-      
-      # Copy registration info
-      cp ${nixClosure}/registration registration
-      
-      # Copy installer script
-      cp ${installerScript} install.sh
-      chmod +x install.sh
-      
-      # Create README
-      cat > README.txt << 'EOF'
-Nix Bootstrap Installer for Termux (aarch64-linux)
-===================================================
 
-This tarball contains a Nix installation configured for:
-  - Store: ${storeDir}
-  - State: ${stateDir}
-  - Config: ${confDir}
+                if [ ! -d "$TERMUX_PREFIX" ]; then
+                  echo "WARNING: $TERMUX_PREFIX not found. Are you running this in Termux?"
+                  echo "Press Ctrl+C to cancel, or Enter to continue anyway..."
+                  read
+                fi
 
-Installation:
-1. Extract this tarball
-2. Run: ./install.sh
+                echo "Creating directories..."
+                if [ -d "$STORE_DIR" ]; then
+                  echo "Existing store found. Removing old installation..."
+                  chmod -R u+w "$STORE_DIR" 2>/dev/null || true
+                  rm -rf "$STORE_DIR"
+                fi
 
-Requirements:
-- Termux on Android (aarch64)
-- At least 2GB of free space
-- Internet connection (for future package builds)
+                mkdir -p "$STORE_DIR"
+                mkdir -p "$STATE_DIR/nix/db"
+                mkdir -p "$STATE_DIR/nix/gcroots"
+                mkdir -p "$STATE_DIR/nix/profiles"
+                mkdir -p "$STATE_DIR/nix/temproots"
+                mkdir -p "$CONF_DIR/nix"
 
-For more information, see the nix-termux repository.
-EOF
-      
-      # Create the final tarball
-      cd $out
-      echo "Creating tarball..."
-      tar -czf nix-termux-aarch64.tar.gz tarball/
-      
-      # Also create a symlink for easy access
-      ln -s nix-termux-aarch64.tar.gz tarball.tar.gz
-      
-      echo "Installer tarball created successfully!"
-      ls -lh nix-termux-aarch64.tar.gz
-    '';
-  };
+                echo "Copying store paths..."
+                cp -r ./store/* "$STORE_DIR/" || true
 
-in {
-  inherit nixBoot installer nixClosure allStdenvStages;
-  
-  # Convenience attributes
-  inherit storeDir stateDir confDir;
+                echo "Initializing Nix database..."
+                if [ -f ./registration ]; then
+                  NIX_STORE_BIN=$(find "$STORE_DIR" -name "nix-store" -type f | head -n 1)
+                  if [ -n "$NIX_STORE_BIN" ]; then
+                    export NIX_STORE_DIR="$STORE_DIR"
+                    export NIX_STATE_DIR="$STATE_DIR"
+                    export NIX_CONF_DIR="$CONF_DIR"
+                    "$NIX_STORE_BIN" --load-db < ./registration
+                    echo "Database initialized successfully."
+                  else
+                    echo "WARNING: Could not find nix-store binary. Database not initialized."
+                  fi
+                fi
+
+                mkdir -p "$STATE_DIR/nix/profiles/per-user/$USER"
+                ln -sf "$STATE_DIR/nix/profiles/per-user/$USER/profile" \
+                  "$STATE_DIR/nix/profiles/default" || true
+
+                echo "Creating nix.conf..."
+                cat > "$CONF_DIR/nix/nix.conf" << EOF
+        # Nix configuration for Termux ($EXPECTED_ARCH)
+        build-users-group =
+        sandbox = false
+        max-jobs = auto
+        cores = 0
+        substituters =
+        trusted-public-keys =
+        EOF
+
+                echo ""
+                echo "Installation complete!"
+                echo "Add to ~/.bashrc or ~/.zshrc:"
+                echo "  export NIX_STORE_DIR=\"$STORE_DIR\""
+                echo "  export NIX_STATE_DIR=\"$STATE_DIR\""
+                echo "  export NIX_CONF_DIR=\"$CONF_DIR\""
+                echo "  export PATH=\"$STATE_DIR/nix/profiles/default/bin:\$PATH\""
+                echo ""
+      '';
+
+      installer = pkgs.stdenv.mkDerivation {
+        name = "nix-termux-installer-${name}";
+        nativeBuildInputs = with pkgs.buildPackages; [
+          gnutar
+          gzip
+          coreutils
+          findutils
+          patchelf
+          file
+          gnused
+          gawk
+        ];
+
+        buildCommand = ''
+                    mkdir -p $out/tarball
+                    cd $out/tarball
+
+                    mkdir -p store
+                    echo "Copying store paths..."
+                    for path in $(cat ${nixClosure}/store-paths); do
+                      echo "  Copying: $path"
+                      storePath=$(basename "$path")
+                      cp -rL "$path" "store/$storePath"
+                    done
+
+                    # Store objects are read-only; patchelf needs writable files
+                    chmod -R u+w store
+
+                    echo ""
+                    echo "Patching ELF interpreter paths..."
+                    echo "Rewriting /nix/store -> ${storeDir}"
+                    echo ""
+
+                    PATCHED_COUNT=0
+                    TOTAL_ELF=0
+                    SKIPPED_COUNT=0
+
+                    while IFS= read -r file; do
+                      FILE_TYPE=$(file "$file" 2>/dev/null || echo "")
+                      if echo "$FILE_TYPE" | grep -q "ELF.*interpreter"; then
+                        TOTAL_ELF=$((TOTAL_ELF + 1))
+                        INTERP=$(patchelf --print-interpreter "$file" 2>/dev/null || true)
+
+                        if [ -n "$INTERP" ] && echo "$INTERP" | grep -q "^/nix/store"; then
+                          NEW_INTERP=$(echo "$INTERP" | sed 's|^/nix/store|${storeDir}|')
+                          INTERP_RELATIVE=$(echo "$INTERP" | sed 's|^/nix/store/||')
+
+                          if [ -f "store/$INTERP_RELATIVE" ] || [ -L "store/$INTERP_RELATIVE" ]; then
+                            if patchelf --set-interpreter "$NEW_INTERP" "$file" 2>/dev/null; then
+                              PATCHED_COUNT=$((PATCHED_COUNT + 1))
+                              if [ "$PATCHED_COUNT" -le 10 ]; then
+                                echo "  patched $(basename "$file"): $NEW_INTERP"
+                              elif [ "$PATCHED_COUNT" -eq 11 ]; then
+                                echo "  ... (showing first 10, continuing silently)"
+                              fi
+                            fi
+                          else
+                            # Soft-skip missing interpreters (e.g. system libc); do not fail the build
+                            SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
+                            if [ "$SKIPPED_COUNT" -le 5 ]; then
+                              echo "  skipped $(basename "$file"): interpreter not in closure ($INTERP_RELATIVE)"
+                            fi
+                          fi
+                        fi
+                      fi
+                    done < <(find store -type f -executable)
+
+                    echo ""
+                    echo "Results:"
+                    echo "  ELF with interpreter: $TOTAL_ELF"
+                    echo "  Successfully patched: $PATCHED_COUNT"
+                    echo "  Skipped: $SKIPPED_COUNT"
+                    echo ""
+
+                    cp ${nixClosure}/registration registration
+                    cp ${installerScript} install.sh
+                    chmod +x install.sh
+
+                    cat > README.txt << EOF
+          Nix Bootstrap Installer for Termux (${name})
+          ===================================================
+
+          Store:  ${storeDir}
+          State:  ${stateDir}
+          Config: ${confDir}
+
+          Installation:
+            1. Extract this tarball
+            2. Run: ./install.sh
+          EOF
+
+                    cd $out
+                    echo "Creating tarball..."
+                    tar -czf nix-termux-${name}.tar.gz tarball/
+                    ln -s nix-termux-${name}.tar.gz tarball.tar.gz
+                    ls -lh nix-termux-${name}.tar.gz
+        '';
+      };
+    in
+    {
+      inherit
+        installer
+        nixBoot
+        nixClosure
+        storeDir
+        stateDir
+        confDir
+        ;
+    };
+
+  archInstallers = lib.mapAttrs (_name: config: (makeInstaller config).installer) supportedArchs;
+
+in
+{
+  installer = archInstallers;
+  inherit supportedArchs;
+
+  # Convenience: native default when attrs are selected without .arch
+  default = archInstallers.aarch64;
 }

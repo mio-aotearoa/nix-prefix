@@ -6,92 +6,90 @@ Two tracks share the same idea: Nix with a custom store prefix where `/nix` is u
 
 | Track | Platform | Store prefix | Docs |
 |-------|----------|--------------|------|
-| **Termux** (below) | `aarch64-linux` (Android) | `/data/data/com.termux/files/nix` | this README |
+| **Termux** (below) | Android (`aarch64`, `armv7l`, `x86_64`, `i686`) | `/data/data/com.termux/files/nix` | this README |
 | **Rootless iOS** | iOS Darwin (`iphoneos` / `pkgsCross.iphone64`) | `/var/jb/nix` | [`ios/README.md`](ios/README.md) |
 
 On rootless jailbroken iOS, `/nix` on the system volume is **not** possible (Signed System Volume). The store lives under `/var/jb/nix` — see the iOS README for path rationale and Mach-O (`install_name_tool`) fixup.
 
 ---
 
-# Nix for Termux (aarch64-linux)
+# Nix for Termux (multi-architecture)
 
 Run the Nix package manager on Android through Termux without root access. Uses a custom prefix at `/data/data/com.termux/files/nix` instead of `/nix`.
 
-**aarch64 (ARM64) devices only.**
+**Supports:** aarch64 (ARM64), armv7l (ARM 32-bit), x86_64, i686
 
 ## Quick Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/mio-19/nix-termux/main/install-nix-termux.sh | bash
+curl -fsSL https://raw.githubusercontent.com/mio-aotearoa/nix-prefix/main/install-nix-termux.sh | bash
 ```
 
-**Requirements:** aarch64 Android device, Termux installed, 2-3 GB free space.
+**Requirements:** Android device with Termux installed, 2-3 GB free space.
 
 After installation: `source ~/.bashrc` (or restart Termux)
 
 ## How It Works
 
 - **Custom Store Prefix**: Uses `/data/data/com.termux/files/nix` instead of `/nix` (no root required)
-- **Native aarch64 Build**: Built natively on ARM64 to ensure correct paths
+- **Multi-architecture Support**: Pre-built packages for aarch64, armv7l, x86_64, and i686
 - **Patchelf**: ELF interpreter paths are rewritten at build time to point to the custom prefix
-- **Complete Bootstrap**: Includes Nix 2.31.2, GCC toolchain, and essential utilities
+- **Bootstrap**: Nix (2.34+) with toolchain stages and essential utilities
 
 ## Requirements
 
-- Android device with **aarch64 (ARM64) architecture**
-- Termux app installed
+- Android device with Termux installed
 - At least 2-3 GB free storage
 - Internet connection (for future package builds)
+- Supported architecture: aarch64, armv7l, x86_64, or i686
 
 ## Building from Source
 
-**Note**: Requires an aarch64-linux system (ARM64 Linux or NixOS).
+**Note**: Requires a Linux system with Nix installed.
 
 ```bash
-# Clone this repository
-git clone https://github.com/mio-19/nix-termux.git
-cd nix-termux
+git clone https://github.com/mio-aotearoa/nix-prefix.git
+cd nix-prefix
 
-# Build (takes several hours)
-./build.sh
+# Build for specific architecture (takes several hours)
+./build.sh -a aarch64
+
+# Build for all architectures
+./build.sh -A
+
+./build.sh --help
 ```
 
-The output will be: `result/nix-termux-aarch64.tar.gz`
+Output: `result/nix-termux-<arch>.tar.gz`
 
-Pre-built releases are available on the [releases page](https://github.com/mio-19/nix-termux/releases/latest).
+Pre-built releases: [releases page](https://github.com/mio-aotearoa/nix-prefix/releases/latest).
 
 ## Installation on Termux
 
 ### Option 1: One-Line Install (Recommended)
 
-The easiest way to install is using the automated installer script:
-
 ```bash
-curl -fsSL https://raw.githubusercontent.com/mio-19/nix-termux/main/install-nix-termux.sh | bash
+curl -fsSL https://raw.githubusercontent.com/mio-aotearoa/nix-prefix/main/install-nix-termux.sh | bash
 ```
 
 Or with `wget`:
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/mio-19/nix-termux/main/install-nix-termux.sh | bash
+wget -qO- https://raw.githubusercontent.com/mio-aotearoa/nix-prefix/main/install-nix-termux.sh | bash
 ```
 
-The script will handle everything automatically, including downloading the latest release, verifying your system, and configuring your environment.
+The script detects your architecture and downloads the matching package.
 
 ### Option 2: Manual Installation
 
-Download from [releases page](https://github.com/mio-19/nix-termux/releases/latest):
+Download from [releases](https://github.com/mio-aotearoa/nix-prefix/releases/latest) for your architecture:
 
 ```bash
-# Download and extract
-curl -LO <release-url>
+# Example for aarch64
+curl -LO https://github.com/mio-aotearoa/nix-prefix/releases/latest/download/nix-termux-aarch64-*.tar.gz
 tar -xzf nix-termux-aarch64-*.tar.gz
 cd tarball
-
-# Run installer
 ./install.sh
-
-# Reload shell
 source ~/.bashrc
 ```
 
@@ -154,14 +152,14 @@ Edit `/data/data/com.termux/files/nix/etc/nix/nix.conf` to customize:
 
 - **Custom Prefix**: Termux cannot access `/nix/store` without root, so we use `/data/data/com.termux/files/nix`
 - **ELF Patching**: Interpreter paths are rewritten using `patchelf` to point to the custom store
-- **Native Build**: Built on aarch64-linux to ensure all paths are correct
+- **Cross Compilation**: Built using Nix's cross-compilation support for all architectures
 - **No Binary Cache**: Must build packages from source due to custom paths
 
 ## Limitations
 
 - **No Binary Cache**: Must build all packages from source
 - **Slow Builds**: Compiling on mobile hardware takes time
-- **Architecture**: Only aarch64-linux supported
+- **Architecture Support**: Limited to architectures supported by Termux
 - **Android Environment**: Some packages may not work due to Android's unique environment
 
 ## Troubleshooting

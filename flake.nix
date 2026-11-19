@@ -30,10 +30,10 @@
             else
               pkgs.hello; # placeholder so other systems still evaluate the flake
 
-          # Termux installer (host: aarch64-linux)
+          # Termux installers (multi-arch attrs; default aarch64 on aarch64-linux host)
           termux-installer =
             if system == "aarch64-linux" then
-              (import ./bootstrap.nix { inherit pkgs; }).installer
+              (import ./bootstrap.nix { inherit pkgs; }).installer.aarch64
             else
               pkgs.hello;
 
