@@ -318,11 +318,12 @@ pkgs.testers.runNixOSTest {
       . /data/data/com.termux/files/nix/etc/nix/termux-nix-env.sh
       echo "HM_VERSION=$(home-manager --version)"
 
-      # Test termux-home-manager-init (flake mode with fixed ISA)
+      # Test termux-home-manager-init (flake mode with Bionic target + fixed ISA)
       termux-home-manager-init --flake
       test -f "$HOME/.config/home-manager/home.nix"
       test -f "$HOME/.config/home-manager/flake.nix"
       grep -q "/data/data/com.termux/files/nix/etc/nix/home-manager-termux.nix" "$HOME/.config/home-manager/home.nix"
+      grep -q 'config = "x86_64-unknown-linux-android"' "$HOME/.config/home-manager/flake.nix"
       grep -q 'gcc.arch = "x86-64-v2"' "$HOME/.config/home-manager/flake.nix"
 
       # Activate Generation 1 against Termux HOME + prefixed NIX_STATE_DIR

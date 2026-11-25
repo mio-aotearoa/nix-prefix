@@ -161,11 +161,28 @@ let
       ARCH="$(uname -m)"
       FIXED_GCC_ARCH=""
       case "$ARCH" in
-        aarch64|arm64) NIX_SYSTEM="aarch64-linux"; FIXED_GCC_ARCH="${androidAarch64GccArch}" ;;
-        armv7l)        NIX_SYSTEM="armv7l-linux" ;;
-        x86_64)        NIX_SYSTEM="x86_64-linux";  FIXED_GCC_ARCH="x86-64-v2" ;;
-        i686)          NIX_SYSTEM="i686-linux" ;;
-        *)             NIX_SYSTEM="''${ARCH}-linux" ;;
+        aarch64|arm64)
+          NIX_SYSTEM="aarch64-linux"
+          BIONIC_CONFIG="aarch64-unknown-linux-android"
+          FIXED_GCC_ARCH="${androidAarch64GccArch}"
+          ;;
+        armv7l)
+          NIX_SYSTEM="armv7l-linux"
+          BIONIC_CONFIG="armv7a-unknown-linux-androideabi"
+          ;;
+        x86_64)
+          NIX_SYSTEM="x86_64-linux"
+          BIONIC_CONFIG="x86_64-unknown-linux-android"
+          FIXED_GCC_ARCH="x86-64-v2"
+          ;;
+        i686)
+          NIX_SYSTEM="i686-linux"
+          BIONIC_CONFIG="i686-unknown-linux-android"
+          ;;
+        *)
+          NIX_SYSTEM="''${ARCH}-linux"
+          BIONIC_CONFIG="''${ARCH}-unknown-linux-android"
+          ;;
       esac
 
       mkdir -p "$HM_DIR"
@@ -206,16 +223,16 @@ let
         NIXPKGS_URL="''${NIXPKGS_SRC:-github:NixOS/nixpkgs/nixpkgs-unstable}"
         HM_URL="''${HM_SRC:-github:nix-community/home-manager}"
         if [ -n "$FIXED_GCC_ARCH" ]; then
-          LOCAL_SYSTEM_EXPR="{ system = \"$NIX_SYSTEM\"; gcc.arch = \"$FIXED_GCC_ARCH\"; }"
+          GCC_ARCH_LINE="      gcc.arch = \"$FIXED_GCC_ARCH\";"
         else
-          LOCAL_SYSTEM_EXPR="\"$NIX_SYSTEM\""
+          GCC_ARCH_LINE=""
         fi
         if [ -e "$HM_DIR/flake.nix" ] && [ "$FORCE" -ne 1 ]; then
           echo "Existing $HM_DIR/flake.nix found (pass --force to overwrite)."
         else
           cat > "$HM_DIR/flake.nix" << FLAKENIX
       {
-        description = "Termux Home Manager configuration";
+        description = "Termux Home Manager configuration (Android Bionic)";
 
         inputs = {
           nixpkgs.url = "$NIXPKGS_URL";
@@ -228,9 +245,22 @@ let
         outputs =
           { nixpkgs, home-manager, ... }:
           let
-            localSystem = $LOCAL_SYSTEM_EXPR;
+            localSystem = "$NIX_SYSTEM";
+            useAndroidPrebuilt =
+              localSystem == "x86_64-linux"
+              || localSystem == "x86_64-darwin"
+              || localSystem == "aarch64-darwin";
             pkgs = import nixpkgs {
               inherit localSystem;
+              config.allowUnfree = useAndroidPrebuilt;
+              crossSystem = {
+                config = "$BIONIC_CONFIG";
+                androidSdkVersion = "35";
+                androidNdkVersion = "27";
+                inherit useAndroidPrebuilt;
+                useLLVM = !useAndroidPrebuilt;
+      $GCC_ARCH_LINE
+              };
             };
           in
           {
@@ -241,7 +271,7 @@ let
           };
       }
       FLAKENIX
-          echo "Wrote $HM_DIR/flake.nix (localSystem: $LOCAL_SYSTEM_EXPR)"
+          echo "Wrote $HM_DIR/flake.nix (Bionic target: $BIONIC_CONFIG''${FIXED_GCC_ARCH:+, gcc.arch=$FIXED_GCC_ARCH})"
         fi
         echo ""
         echo "Next step (flake mode):"
@@ -260,19 +290,24 @@ let
       archCfg,
       androidSdkVersion ? "35",
       androidNdkVersion ? "27",
-      useAndroidPrebuilt ? true,
+      useAndroidPrebuilt ? null,
     }:
     let
       inherit (archCfg) name gccArch systemFeatures;
       variantTag = "${name}-bionic" + lib.optionalString (gccArch != null) "-${gccArch}";
       extraSystemFeaturesStr = lib.concatStringsSep " " systemFeatures;
 
-      targetPkgs = platforms.mkTermuxPkgs {
-        nixpkgs = pkgs.path;
-        localSystem = pkgs.stdenv.buildPlatform.system;
-        arch = name;
-        inherit androidSdkVersion androidNdkVersion useAndroidPrebuilt;
-      };
+      targetPkgs = platforms.mkTermuxPkgs (
+        {
+          nixpkgs = pkgs.path;
+          localSystem = pkgs.stdenv.buildPlatform.system;
+          arch = name;
+          inherit androidSdkVersion androidNdkVersion;
+        }
+        // lib.optionalAttrs (useAndroidPrebuilt != null) {
+          inherit useAndroidPrebuilt;
+        }
+      );
 
       nixBoot = mkPrefixedNix targetPkgs;
       inetutilsTermux = mkInetutilsTermux targetPkgs;
@@ -323,7 +358,6 @@ let
           targetPkgs.nano
           targetPkgs.which
           targetPkgs.file
-          targetPkgs.patchelf
           targetPkgs.perl
           targetPkgs.lndir
           inetutilsTermux

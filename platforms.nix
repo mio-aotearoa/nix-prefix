@@ -93,7 +93,13 @@ rec {
       arch ? "aarch64",
       androidSdkVersion ? "35",
       androidNdkVersion ? "27",
-      useAndroidPrebuilt ? true,
+      # Google's prebuilt Android NDK ships x86_64-linux and darwin host binaries;
+      # fall back to source-built LLVM (`useLLVM = true`) on aarch64-linux hosts.
+      useAndroidPrebuilt ? lib.elem localSystem [
+        "x86_64-linux"
+        "x86_64-darwin"
+        "aarch64-darwin"
+      ],
       overlays ? [ ],
       config ? { },
     }:
