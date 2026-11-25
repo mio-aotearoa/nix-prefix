@@ -1,13 +1,14 @@
 #!/bin/sh
 # Environment setup for Nix on rootless jailbroken iOS
 # Source from ~/.profile / ~/.zshrc / ~/.bashrc after install:
-#   source /var/jb/nix/etc/ios-nix-env.sh
+#   source /var/jb/nix/etc/nix/ios-nix-env.sh
 
 # Nix paths (locked layout under /var/jb — not /nix on SSV root)
 export NIX_PREFIX="/var/jb/nix"
 export NIX_STORE_DIR="$NIX_PREFIX/store"
-export NIX_STATE_DIR="$NIX_PREFIX/var"
-export NIX_CONF_DIR="$NIX_PREFIX/etc"
+export NIX_STATE_DIR="$NIX_PREFIX/var/nix"
+export NIX_CONF_DIR="$NIX_PREFIX/etc/nix"
+export NIX_LOG_DIR="$NIX_PREFIX/var/log/nix"
 
 # SSL certificates (first cacert store path, if present)
 if [ -d "$NIX_STORE_DIR" ]; then
@@ -19,8 +20,8 @@ if [ -d "$NIX_STORE_DIR" ]; then
 fi
 
 # Default profile on PATH
-export PATH="$NIX_STATE_DIR/nix/profiles/default/bin:$PATH"
-export MANPATH="$NIX_STATE_DIR/nix/profiles/default/share/man:${MANPATH:-}"
+export PATH="$NIX_STATE_DIR/profiles/default/bin:$PATH"
+export MANPATH="$NIX_STATE_DIR/profiles/default/share/man:${MANPATH:-}"
 
 # Convenience aliases (bash/zsh)
 if [ -n "${BASH_VERSION:-}${ZSH_VERSION:-}" ]; then

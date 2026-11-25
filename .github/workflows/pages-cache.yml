@@ -1,0 +1,144 @@
+name: Deploy GitHub Pages Nix Substituter
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      arch:
+        description: "Target Termux Bionic architecture to publish (aarch64, x86_64, armv7l, i686)"
+        required: false
+        default: "aarch64"
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages-nix-cache
+  cancel-in-progress: false
+
+jobs:
+  build-cache:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Setup Cachix (prefix)
+        uses: cachix/cachix-action@v15
+        with:
+          name: prefix
+          authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+
+      - name: Prepare signing key from NIX_CACHE_PRIV_KEY secret
+        env:
+          NIX_CACHE_PRIV_KEY: ${{ secrets.NIX_CACHE_PRIV_KEY }}
+        run: |
+          if [ -z "$NIX_CACHE_PRIV_KEY" ]; then
+            echo "::error::Secret NIX_CACHE_PRIV_KEY is not set. Generate one with:"
+            echo "  nix key generate-secret --key-name ${GITHUB_REPOSITORY_OWNER}.github.io-1"
+            echo "and save it in Settings -> Secrets and variables -> Actions -> NIX_CACHE_PRIV_KEY."
+            exit 1
+          fi
+          KEY_FILE="$(mktemp)"
+          chmod 600 "$KEY_FILE"
+          printf '%s\n' "$NIX_CACHE_PRIV_KEY" > "$KEY_FILE"
+          PUB_KEY="$(nix key convert-secret-to-public < "$KEY_FILE")"
+          echo "KEY_FILE=$KEY_FILE" >> "$GITHUB_ENV"
+          echo "PUB_KEY=$PUB_KEY" >> "$GITHUB_ENV"
+          echo "Using signing public key: $PUB_KEY"
+
+      - name: Build pure Stage-2 Bionic closure and export static HTTP Nix cache
+        env:
+          TARGET_ARCH: ${{ inputs.arch || 'aarch64' }}
+        run: |
+          set -euo pipefail
+          OUT_DIR="$PWD/public"
+          STAGE_ROOT="$(mktemp -d)"
+          STORE_DIR="/data/data/com.termux/files/nix/store"
+          mkdir -p "$OUT_DIR"
+
+          cleanup() {
+            chmod -R u+w "$STAGE_ROOT" 2>/dev/null || true
+            rm -rf "$STAGE_ROOT" "${KEY_FILE:-}"
+          }
+          trap cleanup EXIT
+
+          chmod +x scripts/build-stage2.sh
+          ./scripts/build-stage2.sh -a "$TARGET_ARCH" --stage-root "$STAGE_ROOT"
+
+          # Export the genuine pure Stage-2 store paths directly from the Stage-2 local store
+          SRC_STORE="local?root=$STAGE_ROOT&store=$STORE_DIR"
+          TARBALL="result/nix-termux-${TARGET_ARCH}.tar.gz"
+          UNPACK_DIR="$STAGE_ROOT/unpack-reg"
+          mkdir -p "$UNPACK_DIR"
+          tar -xzf "$TARBALL" -C "$UNPACK_DIR" tarball/registration
+
+          mapfile -t STORE_PATHS < <(grep "^${STORE_DIR}/" "$UNPACK_DIR/tarball/registration" | sort -u)
+          echo "Exporting ${#STORE_PATHS[@]} genuine Stage-2 Bionic store paths to static zstd HTTP cache..."
+
+          nix copy \
+            --from "$SRC_STORE" \
+            --to "file://${OUT_DIR}?compression=zstd&secret-key=${KEY_FILE}" \
+            "${STORE_PATHS[@]}"
+
+          cat > "$OUT_DIR/nix-cache-info" << EOF
+          StoreDir: ${STORE_DIR}
+          WantMassQuery: 1
+          Priority: 40
+          EOF
+
+          touch "$OUT_DIR/.nojekyll"
+          printf '%s\n' "$PUB_KEY" > "$OUT_DIR/public-key.txt"
+
+          CACHE_URL="https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY#*/}"
+          cat > "$OUT_DIR/index.html" << EOF
+          <!doctype html>
+          <html lang="en">
+          <head><meta charset="utf-8"><title>nix-prefix Termux Bionic Binary Cache</title></head>
+          <body style="font-family:monospace;max-width:52rem;margin:2rem auto;padding:0 1rem;">
+            <h1>nix-prefix Termux Bionic Binary Cache</h1>
+            <p>Signed static Nix HTTP substituter for <code>${STORE_DIR}</code> (${TARGET_ARCH}, Android Bionic, fixed ISA).</p>
+            <h2>nix.conf</h2>
+            <pre>extra-substituters = ${CACHE_URL}
+          extra-trusted-public-keys = ${PUB_KEY}</pre>
+            <ul>
+              <li><a href="./nix-cache-info">nix-cache-info</a></li>
+              <li><a href="./public-key.txt">public-key.txt</a></li>
+            </ul>
+          </body>
+          </html>
+          EOF
+
+          echo "=== Cache summary ==="
+          cat "$OUT_DIR/nix-cache-info"
+          echo "narinfo count: $(find "$OUT_DIR" -maxdepth 1 -name '*.narinfo' | wc -l)"
+          du -sh "$OUT_DIR"
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+  deploy:
+    needs: build-cache
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

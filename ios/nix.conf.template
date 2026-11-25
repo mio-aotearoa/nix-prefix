@@ -4,8 +4,9 @@
 # Layout:
 #   NIX_PREFIX=/var/jb/nix
 #   NIX_STORE_DIR=/var/jb/nix/store
-#   NIX_STATE_DIR=/var/jb/nix/var
-#   NIX_CONF_DIR=/var/jb/nix/etc
+#   NIX_STATE_DIR=/var/jb/nix/var/nix
+#   NIX_CONF_DIR=/var/jb/nix/etc/nix
+#   NIX_LOG_DIR=/var/jb/nix/var/log/nix
 #
 # /nix on the system root is impossible under Signed System Volume (SSV).
 # /var/jb is a symlink into /private/preboot/... — keep allow-symlinked-store on.

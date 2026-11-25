@@ -4,157 +4,170 @@ on:
   push:
     branches:
       - main
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 jobs:
+  vm-test:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Setup Cachix (prefix)
+        uses: cachix/cachix-action@v15
+        with:
+          name: prefix
+          authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+
+      - name: Build Stage-1 Nix driver & Bionic aarch64 smoke test
+        run: |
+          nix build .#nix-stage1 .#bionic-hello-aarch64 -L --no-link
+
+      - name: Run QEMU/KVM VM test (dramforever Stage 1 -> Stage 2 + Bionic + Home Manager)
+        run: |
+          nix build .#checks.x86_64-linux.vm-test -L --no-link
+
   build:
     runs-on: ubuntu-24.04-arm
     strategy:
+      fail-fast: false
       matrix:
-        arch: [aarch64, armv7l, x86_64, i686]
-    
+        include:
+          - arch: aarch64
+            artifact_suffix: aarch64-bionic-armv8.2-a
+          - arch: x86_64
+            artifact_suffix: x86_64-bionic-x86-64-v2
+
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-    
-    - name: Install Nix
-      uses: cachix/install-nix-action@v31
-      with:
-        nix_path: nixpkgs=channel:nixpkgs-unstable
-    
-    - name: Build installer tarball
-      run: |
-        chmod +x build.sh
-        ./build.sh -a ${{ matrix.arch }}
-    
-    - name: Get version from commit
-      id: version
-      run: |
-        VERSION="$(date +%Y%m%d-%H%M%S)-${GITHUB_SHA::7}"
-        echo "version=$VERSION" >> $GITHUB_OUTPUT
-        echo "Building version: $VERSION"
-    
-    - name: Verify tarball
-      run: |
-        ls -lh result/nix-termux-${{ matrix.arch }}.tar.gz
-        tar -tzf result/nix-termux-${{ matrix.arch }}.tar.gz | head -20
-        echo "Total files in tarball:"
-        tar -tzf result/nix-termux-${{ matrix.arch }}.tar.gz | wc -l
-    
-    - name: Rename tarball with version
-      run: |
-        cp result/nix-termux-${{ matrix.arch }}.tar.gz nix-termux-${{ matrix.arch }}-${{ steps.version.outputs.version }}.tar.gz
-    
-    - name: Calculate checksums
-      run: |
-        sha256sum nix-termux-${{ matrix.arch }}-${{ steps.version.outputs.version }}.tar.gz > checksums-${{ matrix.arch }}.txt
-        sha512sum nix-termux-${{ matrix.arch }}-${{ steps.version.outputs.version }}.tar.gz >> checksums-${{ matrix.arch }}.txt
-        cat checksums-${{ matrix.arch }}.txt
-    
-    - name: Upload build artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: nix-termux-installer-${{ matrix.arch }}-${{ steps.version.outputs.version }}
-        path: |
-          nix-termux-${{ matrix.arch }}-${{ steps.version.outputs.version }}.tar.gz
-          checksums-${{ matrix.arch }}.txt
-          result/${{ matrix.arch }}/build.log
-        retention-days: 30
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Setup Cachix (prefix)
+        uses: cachix/cachix-action@v15
+        with:
+          name: prefix
+          authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+
+      - name: Build Stage-1 Nix driver (cached on prefix.cachix.org)
+        run: |
+          nix build .#nix-stage1 -L -o result/nix-stage1
+
+      - name: Build pure dramforever Stage-2 Bionic installer tarball
+        run: |
+          chmod +x scripts/build-stage2.sh
+          ./scripts/build-stage2.sh -a "${{ matrix.arch }}"
+
+      - name: Get version from commit
+        id: version
+        run: |
+          VERSION="$(date +%Y%m%d-%H%M%S)-${GITHUB_SHA::7}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Building version: $VERSION"
+
+      - name: Verify tarball
+        run: |
+          ls -lh "result/nix-termux-${{ matrix.arch }}.tar.gz"
+          tar -tzf "result/nix-termux-${{ matrix.arch }}.tar.gz" | head -20
+          echo "Total files in tarball:"
+          tar -tzf "result/nix-termux-${{ matrix.arch }}.tar.gz" | wc -l
+
+      - name: Rename tarball with version
+        run: |
+          cp "result/nix-termux-${{ matrix.arch }}.tar.gz" \
+             "nix-termux-${{ matrix.artifact_suffix }}-${{ steps.version.outputs.version }}.tar.gz"
+
+      - name: Calculate checksums
+        run: |
+          sha256sum "nix-termux-${{ matrix.artifact_suffix }}-${{ steps.version.outputs.version }}.tar.gz" > "checksums-${{ matrix.artifact_suffix }}.txt"
+          sha512sum "nix-termux-${{ matrix.artifact_suffix }}-${{ steps.version.outputs.version }}.tar.gz" >> "checksums-${{ matrix.artifact_suffix }}.txt"
+          cat "checksums-${{ matrix.artifact_suffix }}.txt"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: nix-termux-installer-${{ matrix.artifact_suffix }}-${{ steps.version.outputs.version }}
+          path: |
+            nix-termux-${{ matrix.artifact_suffix }}-${{ steps.version.outputs.version }}.tar.gz
+            checksums-${{ matrix.artifact_suffix }}.txt
+            result/${{ matrix.arch }}/build.log
+          retention-days: 30
 
   release:
-    needs: build
+    needs: [build, vm-test]
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-      
-    - name: Get version from commit
-      id: version
-      run: |
-        VERSION="$(date +%Y%m%d-%H%M%S)-${GITHUB_SHA::7}"
-        echo "version=$VERSION" >> $GITHUB_OUTPUT
-        echo "Building version: $VERSION"
-    
-    - name: Download all artifacts
-      uses: actions/download-artifact@v4
-      with:
-        path: artifacts
-        merge-multiple: false
-    
-    - name: Prepare release files
-      run: |
-        mkdir release-files
-        find artifacts/ -name "*.tar.gz" -exec cp {} release-files/ \;
-        find artifacts/ -name "checksums-*.txt" -exec cp {} release-files/ \;
-        ls -la release-files/
-        echo "Files to be included in release:"
-        ls -la release-files/
-    
-    - name: Create release
-      uses: softprops/action-gh-release@v2
-      with:
-        tag_name: ${{ steps.version.outputs.version }}
-        name: ${{ steps.version.outputs.version }}
-        body: |
-          # Nix for Termux (Multi-architecture)
-          
-          Complete Nix installation for Termux on Android devices.
-          
-          ## Quick Install
-          
-          ```bash
-          curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install-nix-termux.sh | bash
-          ```
-          
-          ## Manual Install
-          
-          Download the appropriate tarball for your device architecture:
-          
-          ### aarch64 (ARM64 - most common)
-          ```bash
-          curl -LO https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.version }}/nix-termux-aarch64-${{ steps.version.outputs.version }}.tar.gz
-          tar -xzf nix-termux-aarch64-${{ steps.version.outputs.version }}.tar.gz
-          cd tarball && ./install.sh
-          ```
-          
-          ### armv7l (ARM 32-bit)
-          ```bash
-          curl -LO https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.version }}/nix-termux-armv7l-${{ steps.version.outputs.version }}.tar.gz
-          tar -xzf nix-termux-armv7l-${{ steps.version.outputs.version }}.tar.gz
-          cd tarball && ./install.sh
-          ```
-          
-          ### x86_64 (Intel/AMD 64-bit)
-          ```bash
-          curl -LO https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.version }}/nix-termux-x86_64-${{ steps.version.outputs.version }}.tar.gz
-          tar -xzf nix-termux-x86_64-${{ steps.version.outputs.version }}.tar.gz
-          cd tarball && ./install.sh
-          ```
-          
-          ### i686 (Intel/AMD 32-bit)
-          ```bash
-          curl -LO https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.version }}/nix-termux-i686-${{ steps.version.outputs.version }}.tar.gz
-          tar -xzf nix-termux-i686-${{ steps.version.outputs.version }}.tar.gz
-          cd tarball && ./install.sh
-          ```
-          
-          ## What's Included
-          
-          - Nix 2.31.2
-          - Complete toolchain (GCC, glibc, binutils)
-          - Essential utilities (bash, coreutils, git, etc.)
-          
-          ## Requirements
-          
-          - Android device with Termux installed
-          - 2-3 GB free space
-          - Architecture matching one of the packages above
-          
-          See [README](https://github.com/${{ github.repository }}/blob/main/README.md) for details.
-          
-          **Checksums:** See `checksums-<arch>.txt` for each architecture
-        files: |
-          release-files/*.tar.gz
-          release-files/checksums-*.txt
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Get version from commit
+        id: version
+        run: |
+          VERSION="$(date +%Y%m%d-%H%M%S)-${GITHUB_SHA::7}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Building version: $VERSION"
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: false
+
+      - name: Prepare release files
+        run: |
+          mkdir release-files
+          find artifacts/ -name "*.tar.gz" -exec cp {} release-files/ \;
+          find artifacts/ -name "checksums-*.txt" -exec cp {} release-files/ \;
+          ls -la release-files/
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: ${{ steps.version.outputs.version }}
+          body: |
+            # Nix + Home Manager for Termux (Pure Stage-2 Android Bionic)
+
+            Pure dramforever Stage-2 prefixed Nix (`/data/data/com.termux/files/nix`) + Home Manager compiled natively for Android's Bionic C library (`/system/bin/linker64`) with a single fixed Android `aarch64` ISA (`armv8.2-a`).
+
+            ## Quick Install
+
+            ```bash
+            curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install-nix-termux.sh | bash
+            ```
+
+            ## Host Build Cache (Cachix)
+
+            - Substituter: `https://prefix.cachix.org`
+            - Public key: `prefix.cachix.org-1:kxW9psUOK2149rGlsQCQ3uD/17460lMtjZxMfOhV9o4=`
+
+            ## What's Included
+
+            - Pure Stage-2 Nix 2.34 + Home Manager (Termux-patched, zero `patchelf` hacks)
+            - Android native Bionic C library (`aarch64-unknown-linux-android`, single fixed `armv8.2-a` ISA)
+            - All `stdenv` bootstrap stages (`__bootPackages.stdenv`) to avoid toolchain rebuilds
+            - `termux-home-manager-init` & reusable `homeManagerModules.termux`
+
+            See [README](https://github.com/${{ github.repository }}/blob/main/README.md) for details.
+          files: |
+            release-files/*.tar.gz
+            release-files/checksums-*.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

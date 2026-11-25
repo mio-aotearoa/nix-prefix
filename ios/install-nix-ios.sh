@@ -15,8 +15,9 @@ set -e
 JB_PREFIX="/var/jb"
 NIX_PREFIX="${JB_PREFIX}/nix"
 STORE_DIR="${NIX_PREFIX}/store"
-STATE_DIR="${NIX_PREFIX}/var"
-CONF_DIR="${NIX_PREFIX}/etc"
+STATE_DIR="${NIX_PREFIX}/var/nix"
+LOG_DIR="${NIX_PREFIX}/var/log/nix"
+CONF_DIR="${NIX_PREFIX}/etc/nix"
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 
@@ -97,23 +98,24 @@ fi
 warning "No installer tarball found."
 warning "Creating directory layout + config only (skeleton mode)."
 echo ""
-info "Build on an aarch64-darwin Mac first:"
-echo "  nix-build ios/bootstrap.nix -A installer"
+info "Build Stage 2 on an aarch64-darwin Mac first:"
+echo "  nix-build --store 'local?root=/tmp/ios-stage2&store=/var/jb/nix/store' ios/bootstrap.nix -A installer"
 echo "Then copy result/nix-ios-jb-aarch64.tar.gz to the device and re-run."
 echo ""
 
 mkdir -p "$STORE_DIR"
-mkdir -p "$STATE_DIR/nix/db"
-mkdir -p "$STATE_DIR/nix/gcroots"
-mkdir -p "$STATE_DIR/nix/profiles/per-user/${USER:-mobile}"
-mkdir -p "$STATE_DIR/nix/temproots"
-mkdir -p "$CONF_DIR/nix"
+mkdir -p "$STATE_DIR/db"
+mkdir -p "$STATE_DIR/gcroots"
+mkdir -p "$STATE_DIR/profiles/per-user/${USER:-mobile}"
+mkdir -p "$STATE_DIR/temproots"
+mkdir -p "$LOG_DIR/drvs"
+mkdir -p "$CONF_DIR"
 
 if [ -f "${SCRIPT_DIR}/nix.conf.template" ]; then
-  cp "${SCRIPT_DIR}/nix.conf.template" "$CONF_DIR/nix/nix.conf"
+  cp "${SCRIPT_DIR}/nix.conf.template" "$CONF_DIR/nix.conf"
   success "Installed nix.conf (allow-symlinked-store enabled)"
 else
-  cat > "$CONF_DIR/nix/nix.conf" << 'EOF'
+  cat > "$CONF_DIR/nix.conf" << 'EOF'
 build-users-group =
 sandbox = false
 allow-symlinked-store = true
@@ -128,8 +130,8 @@ fi
 cp "${SCRIPT_DIR}/ios-nix-env.sh" "$CONF_DIR/ios-nix-env.sh"
 chmod 644 "$CONF_DIR/ios-nix-env.sh"
 
-ln -sf "$STATE_DIR/nix/profiles/per-user/${USER:-mobile}/profile" \
-  "$STATE_DIR/nix/profiles/default" || true
+ln -sfn "$STATE_DIR/profiles/per-user/${USER:-mobile}/profile" \
+  "$STATE_DIR/profiles/default" || true
 
 success "Skeleton layout ready under $NIX_PREFIX"
 echo ""
