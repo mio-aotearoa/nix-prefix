@@ -56,13 +56,18 @@ NIXPKGS_PATH="$(nix --extra-experimental-features 'nix-command flakes' eval --ra
 if [ "$DIRECT_MODE" = "yes" ]; then
   mkdir -p "$STORE_DIR" "$STATE_DIR" "$LOG_DIR" "${NIX_PREFIX}/etc/nix"
   STORE_URI="local?store=${STORE_DIR}&state=${STATE_DIR}&log=${LOG_DIR}"
+  if unshare --user --mount true 2>/dev/null; then
+    SANDBOX_OPT="true"
+  else
+    SANDBOX_OPT="false"
+  fi
   NIX_BUILD_OPTS=(
     --option substituters ""
     --option hashed-mirrors "https://tarballs.nixos.org"
-    --option sandbox false
+    --option sandbox "$SANDBOX_OPT"
     --option filter-syscalls false
   )
-  MODE_DESC="direct (${NIX_PREFIX}, no userns required)"
+  MODE_DESC="direct (${NIX_PREFIX}, sandbox=${SANDBOX_OPT})"
 else
   STAGE_ROOT="${STAGE_ROOT:-$PWD/result/stage2-root}"
   mkdir -p "$STAGE_ROOT"
@@ -103,10 +108,21 @@ python3 scripts/seed-stage2-fods.py \
   --nixpkgs "$NIXPKGS_PATH" \
   --scope all
 
+set +e
 "$NIX_BUILD_BIN" --store "$STORE_URI" \
   "${NIX_BUILD_OPTS[@]}" \
   "$STAGE2_DRV" \
   -o "$OUT_DIR/$ARCH/installer" 2>&1 | tee "$OUT_DIR/$ARCH/build.log"
+BUILD_RC="${PIPESTATUS[0]}"
+set -e
+
+if [ "$BUILD_RC" -ne 0 ]; then
+  echo ""
+  echo "================ ROOT-CAUSE BUILDER FAILURES ================"
+  grep -n -B 2 -A 35 "Reason: builder failed" "$OUT_DIR/$ARCH/build.log" | tail -n 120 || true
+  echo "============================================================="
+  exit "$BUILD_RC"
+fi
 
 TARBALL="$(find -L "$OUT_DIR/$ARCH/installer" -maxdepth 1 -name 'nix-termux-*.tar.gz' -type f | head -n 1)"
 if [ -n "$TARBALL" ]; then

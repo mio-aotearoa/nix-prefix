@@ -366,13 +366,22 @@ let
         ignoreCollisions = true;
       };
 
+      isNativeBuild = targetPkgs.stdenv.buildPlatform.config == targetPkgs.stdenv.hostPlatform.config;
+
       nixClosure = pkgs.closureInfo {
         rootPaths = [
           defaultProfile
-          targetPkgs.stdenvNoCC
           homeManagerTermux.src
         ]
-        ++ allStdenvStages;
+        # Only bundle stdenv stages when building natively for the target platform;
+        # during cross-compilation (e.g. x86_64-linux -> aarch64-unknown-linux-android),
+        # targetPkgs.stdenv contains host buildPlatform compilers that cannot run on Android.
+        ++ lib.optionals isNativeBuild (
+          [
+            targetPkgs.stdenvNoCC
+          ]
+          ++ allStdenvStages
+        );
       };
 
       installerScript = pkgs.writeScript "install.sh" ''
