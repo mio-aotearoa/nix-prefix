@@ -57,30 +57,36 @@ jobs:
           echo "PUB_KEY=$PUB_KEY" >> "$GITHUB_ENV"
           echo "Using signing public key: $PUB_KEY"
 
+      - name: Prepare direct Termux prefix store (/data/data/com.termux/files/nix)
+        run: |
+          sudo mkdir -p /data/data/com.termux/files/nix/{store,var/nix,var/log/nix,etc/nix}
+          sudo chown -R "$(id -u):$(id -g)" /data/data/com.termux/files
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+
       - name: Build pure Stage-2 Bionic closure and export static HTTP Nix cache
         env:
           TARGET_ARCH: ${{ inputs.arch || 'aarch64' }}
         run: |
           set -euo pipefail
           OUT_DIR="$PWD/public"
-          STAGE_ROOT="$(mktemp -d)"
-          STORE_DIR="/data/data/com.termux/files/nix/store"
+          UNPACK_DIR="$(mktemp -d)"
+          NIX_PREFIX="/data/data/com.termux/files/nix"
+          STORE_DIR="${NIX_PREFIX}/store"
+          STATE_DIR="${NIX_PREFIX}/var/nix"
+          LOG_DIR="${NIX_PREFIX}/var/log/nix"
           mkdir -p "$OUT_DIR"
 
           cleanup() {
-            chmod -R u+w "$STAGE_ROOT" 2>/dev/null || true
-            rm -rf "$STAGE_ROOT" "${KEY_FILE:-}"
+            rm -rf "$UNPACK_DIR" "${KEY_FILE:-}"
           }
           trap cleanup EXIT
 
           chmod +x scripts/build-stage2.sh
-          ./scripts/build-stage2.sh -a "$TARGET_ARCH" --stage-root "$STAGE_ROOT"
+          ./scripts/build-stage2.sh --direct -a "$TARGET_ARCH"
 
-          # Export the genuine pure Stage-2 store paths directly from the Stage-2 local store
-          SRC_STORE="local?root=$STAGE_ROOT&store=$STORE_DIR"
+          # Export the genuine pure Stage-2 store paths directly from /data/data/com.termux/files/nix/store
+          SRC_STORE="local?store=${STORE_DIR}&state=${STATE_DIR}&log=${LOG_DIR}"
           TARBALL="result/nix-termux-${TARGET_ARCH}.tar.gz"
-          UNPACK_DIR="$STAGE_ROOT/unpack-reg"
-          mkdir -p "$UNPACK_DIR"
           tar -xzf "$TARBALL" -C "$UNPACK_DIR" tarball/registration
 
           mapfile -t STORE_PATHS < <(grep "^${STORE_DIR}/" "$UNPACK_DIR/tarball/registration" | sort -u)

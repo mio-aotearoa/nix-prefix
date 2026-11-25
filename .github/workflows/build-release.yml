@@ -16,11 +16,18 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Enable KVM access for NixOS VM test
+        run: |
+          if [ -e /dev/kvm ]; then
+            sudo chmod 666 /dev/kvm
+          fi
+
       - name: Install Nix
         uses: cachix/install-nix-action@v31
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
+            system-features = nixos-test benchmark big-parallel kvm
 
       - name: Setup Cachix (prefix)
         uses: cachix/cachix-action@v15
@@ -67,10 +74,16 @@ jobs:
         run: |
           nix build .#nix-stage1 -L -o result/nix-stage1
 
+      - name: Prepare direct Termux prefix store (/data/data/com.termux/files/nix)
+        run: |
+          sudo mkdir -p /data/data/com.termux/files/nix/{store,var/nix,var/log/nix,etc/nix}
+          sudo chown -R "$(id -u):$(id -g)" /data/data/com.termux/files
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+
       - name: Build pure dramforever Stage-2 Bionic installer tarball
         run: |
           chmod +x scripts/build-stage2.sh
-          ./scripts/build-stage2.sh -a "${{ matrix.arch }}"
+          ./scripts/build-stage2.sh --direct -a "${{ matrix.arch }}"
 
       - name: Get version from commit
         id: version
