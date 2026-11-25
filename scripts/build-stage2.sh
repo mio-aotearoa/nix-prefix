@@ -81,6 +81,19 @@ echo "  Target:     $ARCH (Android Bionic, fixed ISA)"
 echo "  Nixpkgs:    $NIXPKGS_PATH"
 echo "============================================================"
 
+# Seed nixpkgs minimal-bootstrap fixed-output source tree (stage0-posix-*-source) into the
+# custom Stage-2 store. On x86_64-linux / i686-linux, nixpkgs bootstraps from minimal-bootstrap
+# whose directory-NAR FOD cannot be fetched by builtin:fetchurl without a substituter for this storeDir.
+echo "Seeding minimal-bootstrap source tree into $STORE_DIR..."
+MINBOOT_SRC="$(nix-build "$NIXPKGS_PATH" -A make-minimal-bootstrap-sources --no-out-link)"
+MINBOOT_NAME="$(basename "$MINBOOT_SRC" | sed 's/^[0-9a-z]\{32\}-//')"
+SEED_TMP="$(mktemp -d)"
+cp -a "$MINBOOT_SRC" "$SEED_TMP/$MINBOOT_NAME"
+SEEDED_PATH="$(nix-store --store "$STORE_URI" --add-fixed --recursive sha256 "$SEED_TMP/$MINBOOT_NAME")"
+chmod -R u+w "$SEED_TMP" 2>/dev/null || true
+rm -rf "$SEED_TMP"
+echo "  Seeded: $SEEDED_PATH"
+
 NIX_BUILD_BIN="nix-build"
 if [ "$DIRECT_MODE" = "yes" ] && [ -x "$OUT_DIR/nix-stage1/bin/nix-build" ]; then
   NIX_BUILD_BIN="$OUT_DIR/nix-stage1/bin/nix-build"
