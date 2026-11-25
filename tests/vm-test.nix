@@ -29,6 +29,7 @@
   pkgs,
   nixStage1,
   bionicHelloAarch64,
+  bionicAarch64Probe,
   termuxBootstrap,
   nixpkgsSrc,
   repoSrc,
@@ -38,6 +39,13 @@ let
   hmSrc = pkgs.home-manager.src;
   homeManagerTermux = termuxBootstrap.mkHomeManagerTermux pkgs;
   termuxHomeManagerInit = termuxBootstrap.mkTermuxHomeManagerInit pkgs;
+  hostArch = if pkgs.stdenv.hostPlatform.isAarch64 then "aarch64" else "x86_64";
+  hostArchCfg = termuxBootstrap.supportedArchs.${hostArch};
+  extraSystemFeaturesStr = pkgs.lib.concatStringsSep " " hostArchCfg.systemFeatures;
+  expectedGccArch = hostArchCfg.gccArch;
+  expectedBionicConfig = hostArchCfg.bionicConfig;
+  aarch64Runner =
+    if pkgs.stdenv.hostPlatform.isAarch64 then "" else "${pkgs.qemu-user}/bin/qemu-aarch64";
 
   # Build two real Home Manager activation packages using our Termux module
   # (`home-manager/termux.nix`) to test real Home Manager activation & generation
@@ -169,7 +177,7 @@ pkgs.testers.runNixOSTest {
     trusted-public-keys =
     keep-build-log = true
     auto-optimise-store = false
-    extra-system-features = gccarch-x86-64 gccarch-x86-64-v2
+    extra-system-features = ${extraSystemFeaturesStr}
     EOF
 
       ln -sfn "$NIX_PREFIX/var/nix/profiles/per-user/u0_a100/profile" "$TERMUX/home/.nix-profile"
@@ -204,7 +212,7 @@ pkgs.testers.runNixOSTest {
       # Verify compiled-in sysconfdir reads /data/data/com.termux/files/nix/etc/nix/nix.conf
       nix config show | grep -q '^sandbox = false'
       nix config show | grep -q 'flakes'
-      nix config show | grep -q 'gccarch-x86-64-v2'
+      nix config show | grep -q 'gccarch-${expectedGccArch}'
 
       # Initialize genuine prefixed Nix DB under /data/data/com.termux/files/nix/var/nix/db
       nix-store --init
@@ -269,6 +277,11 @@ pkgs.testers.runNixOSTest {
         exit 1
       fi
 
+      # Actually EXECUTE a compiled Android 35 Bionic aarch64 (armv8.2-a LSE atomics) binary!
+      PROBE_OUT=$(${aarch64Runner} "${bionicAarch64Probe}/bin/probe")
+      echo "BIONIC_AARCH64_EXEC=$PROBE_OUT"
+      echo "$PROBE_OUT" | grep -q "BIONIC_AARCH64_ARMV82_RUN_OK api=35 counter=41->42 machine=aarch64"
+
       # Verify single fixed aarch64 Bionic ISA in platforms.nix
       BIONIC_CHECK=$(nix eval --raw --impure --expr '
         let
@@ -323,8 +336,8 @@ pkgs.testers.runNixOSTest {
       test -f "$HOME/.config/home-manager/home.nix"
       test -f "$HOME/.config/home-manager/flake.nix"
       grep -q "/data/data/com.termux/files/nix/etc/nix/home-manager-termux.nix" "$HOME/.config/home-manager/home.nix"
-      grep -q 'config = "x86_64-unknown-linux-android"' "$HOME/.config/home-manager/flake.nix"
-      grep -q 'gcc.arch = "x86-64-v2"' "$HOME/.config/home-manager/flake.nix"
+      grep -q 'config = "${expectedBionicConfig}"' "$HOME/.config/home-manager/flake.nix"
+      grep -q 'gcc.arch = "${expectedGccArch}"' "$HOME/.config/home-manager/flake.nix"
 
       # Activate Generation 1 against Termux HOME + prefixed NIX_STATE_DIR
       # (using host nix-daemon socket for the /nix/store-built test generation)

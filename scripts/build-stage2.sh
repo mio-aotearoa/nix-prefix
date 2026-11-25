@@ -46,7 +46,6 @@ echo "============================================================"
 
 nix-build --store "$STORE_URI" \
   --option substituters "" \
-  --option sandbox false \
   bootstrap.nix \
   -A "installer.${ARCH}" \
   --arg nixpkgs "$NIXPKGS_PATH" \

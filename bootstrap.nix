@@ -458,6 +458,7 @@ let
         # Nix configuration for Termux ($EXPECTED_ARCH, bionic, isa=$TARGET_GCC_ARCH)
         build-users-group =
         sandbox = false
+        filter-syscalls = false
         experimental-features = nix-command flakes
         max-jobs = auto
         cores = 0

@@ -11,8 +11,9 @@
 # Single-user mode (no build daemon / nixbld group on Termux)
 build-users-group =
 
-# Sandboxing requires unprivileged user/mount namespaces unavailable on Android
+# Sandboxing and Nix's own seccomp BPF filter require privileges/syscalls unavailable on Android
 sandbox = false
+filter-syscalls = false
 
 # Enable modern Nix CLI and Flakes (required for flake-based Home Manager)
 experimental-features = nix-command flakes

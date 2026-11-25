@@ -106,12 +106,44 @@
             localSystem = system;
             arch = "aarch64";
           };
+          bionicAarch64Probe = bionicAarch64Pkgs.stdenv.mkDerivation {
+            name = "bionic-aarch64-armv82-probe";
+            dontUnpack = true;
+            buildPhase = ''
+              cat > probe.c << 'EOF'
+              #include <stdio.h>
+              #include <stdatomic.h>
+              #include <sys/utsname.h>
+              #ifndef __BIONIC__
+              #error "Expected Android Bionic (__BIONIC__ not defined)!"
+              #endif
+              #ifndef __ARM_FEATURE_ATOMICS
+              #error "Expected ARMv8.1/v8.2-A LSE atomics (__ARM_FEATURE_ATOMICS not defined)!"
+              #endif
+              int main(void) {
+                _Atomic int counter = 41;
+                int prev = atomic_fetch_add(&counter, 1);
+                struct utsname u;
+                uname(&u);
+                printf("BIONIC_AARCH64_ARMV82_RUN_OK api=%d counter=%d->%d machine=%s\n",
+                       __ANDROID_API__, prev, atomic_load(&counter), u.machine);
+                return 0;
+              }
+              EOF
+              $CC -O2 -static -no-pie probe.c -o probe
+            '';
+            installPhase = ''
+              mkdir -p $out/bin
+              cp probe $out/bin/probe
+            '';
+          };
         in
         {
           vm-test = import ./tests/vm-test.nix {
             inherit pkgs;
             nixStage1 = termuxBootstrap.nixStage1;
             bionicHelloAarch64 = bionicAarch64Pkgs.hello;
+            inherit bionicAarch64Probe;
             termuxBootstrap = termuxBootstrap;
             nixpkgsSrc = nixpkgs.outPath;
             repoSrc = self;
