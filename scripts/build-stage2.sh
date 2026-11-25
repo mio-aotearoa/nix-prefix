@@ -58,6 +58,7 @@ if [ "$DIRECT_MODE" = "yes" ]; then
   STORE_URI="local?store=${STORE_DIR}&state=${STATE_DIR}&log=${LOG_DIR}"
   NIX_BUILD_OPTS=(
     --option substituters ""
+    --option hashed-mirrors "https://tarballs.nixos.org"
     --option sandbox false
     --option filter-syscalls false
   )
@@ -68,6 +69,7 @@ else
   STORE_URI="local?root=${STAGE_ROOT}&store=${STORE_DIR}"
   NIX_BUILD_OPTS=(
     --option substituters ""
+    --option hashed-mirrors "https://tarballs.nixos.org"
   )
   MODE_DESC="diverted chroot-root (${STAGE_ROOT})"
 fi
@@ -81,30 +83,29 @@ echo "  Target:     $ARCH (Android Bionic, fixed ISA)"
 echo "  Nixpkgs:    $NIXPKGS_PATH"
 echo "============================================================"
 
-# Seed nixpkgs minimal-bootstrap fixed-output source tree (stage0-posix-*-source) into the
-# custom Stage-2 store. On x86_64-linux / i686-linux, nixpkgs bootstraps from minimal-bootstrap
-# whose directory-NAR FOD cannot be fetched by builtin:fetchurl without a substituter for this storeDir.
-echo "Seeding minimal-bootstrap source tree into $STORE_DIR..."
-MINBOOT_SRC="$(nix-build "$NIXPKGS_PATH" -A make-minimal-bootstrap-sources --no-out-link)"
-MINBOOT_NAME="$(basename "$MINBOOT_SRC" | sed 's/^[0-9a-z]\{32\}-//')"
-SEED_TMP="$(mktemp -d)"
-cp -a "$MINBOOT_SRC" "$SEED_TMP/$MINBOOT_NAME"
-SEEDED_PATH="$(nix-store --store "$STORE_URI" --add-fixed --recursive sha256 "$SEED_TMP/$MINBOOT_NAME")"
-chmod -R u+w "$SEED_TMP" 2>/dev/null || true
-rm -rf "$SEED_TMP"
-echo "  Seeded: $SEEDED_PATH"
-
 NIX_BUILD_BIN="nix-build"
 if [ "$DIRECT_MODE" = "yes" ] && [ -x "$OUT_DIR/nix-stage1/bin/nix-build" ]; then
   NIX_BUILD_BIN="$OUT_DIR/nix-stage1/bin/nix-build"
   echo "Using Stage-1 Nix driver: $NIX_BUILD_BIN"
 fi
 
+# Instantiate the Stage-2 derivation first and pre-seed pure Fixed-Output source
+# derivations (stage0-posix-*-source, config.guess, config.sub, bootstrap tarballs)
+# from host /nix/store (cache.nixos.org) into the custom store via `nix-store --add-fixed`.
+# This avoids upstream 502s (e.g. git.savannah.gnu.org) while compiling 100% of built
+# derivations natively in /data/data/com.termux/files/nix/store.
+STAGE2_DRV="$(nix-instantiate --store "$STORE_URI" bootstrap.nix -A "installer.${ARCH}" --arg nixpkgs "$NIXPKGS_PATH")"
+echo "Instantiated Stage-2 drv: $STAGE2_DRV"
+python3 scripts/seed-stage2-fods.py \
+  --store "$STORE_URI" \
+  --store-dir "$STORE_DIR" \
+  --drv "$STAGE2_DRV" \
+  --nixpkgs "$NIXPKGS_PATH" \
+  --scope all
+
 "$NIX_BUILD_BIN" --store "$STORE_URI" \
   "${NIX_BUILD_OPTS[@]}" \
-  bootstrap.nix \
-  -A "installer.${ARCH}" \
-  --arg nixpkgs "$NIXPKGS_PATH" \
+  "$STAGE2_DRV" \
   -o "$OUT_DIR/$ARCH/installer" 2>&1 | tee "$OUT_DIR/$ARCH/build.log"
 
 TARBALL="$(find -L "$OUT_DIR/$ARCH/installer" -maxdepth 1 -name 'nix-termux-*.tar.gz' -type f | head -n 1)"
