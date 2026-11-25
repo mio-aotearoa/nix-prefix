@@ -157,7 +157,7 @@ if [ "$BOOTSTRAP_ONLY" -eq 0 ]; then
   while IFS= read -r -d '' candidate; do
     NIX_STORE_BIN="$candidate"
     break
-  done < <(find "$STORE_DIR" -path '*/bin/nix-store' -type f -print0)
+  done < <(find "$STORE_DIR" -path '*/bin/nix-store' \( -type f -o -type l \) -print0)
   [ -n "$NIX_STORE_BIN" ] || die "payload does not contain bin/nix-store"
 
   export NIX_STORE_DIR="$STORE_DIR"
@@ -170,7 +170,7 @@ if [ "$BOOTSTRAP_ONLY" -eq 0 ]; then
   while IFS= read -r -d '' candidate; do
     NIX_BIN="$candidate"
     break
-  done < <(find "$STORE_DIR" -path '*/bin/nix' -type f -print0)
+  done < <(find "$STORE_DIR" -path '*/bin/nix' \( -type f -o -type l \) -print0)
   if [ -n "$NIX_BIN" ]; then
     NIX_PACKAGE="$(dirname "$(dirname "$NIX_BIN")")"
     ln -sfn "$NIX_PACKAGE" "$STATE_DIR/profiles/default"

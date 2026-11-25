@@ -75,7 +75,7 @@ PAYLOAD_ROOT="$WORK_DIR/payload/tarball"
 PAYLOAD_STORE="$PAYLOAD_ROOT/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-ios-probe"
 mkdir -p "$PAYLOAD_STORE/bin"
 cp "$WORK_DIR/probe" "$PAYLOAD_STORE/bin/nix"
-cp "$WORK_DIR/probe" "$PAYLOAD_STORE/bin/nix-store"
+ln -s nix "$PAYLOAD_STORE/bin/nix-store"
 printf '%s\n' '/var/jb/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-ios-probe/bin/nix' \
   > "$PAYLOAD_ROOT/registration"
 printf '%s\n' '#!/bin/sh' 'exit 0' > "$PAYLOAD_ROOT/install.sh"
@@ -114,6 +114,21 @@ tar -czf "$WORK_DIR/foreign-payload.tar.gz" -C "$WORK_DIR/foreign-payload" tarba
 if "$ROOT_DIR/ios/validate-payload.sh" \
   "$WORK_DIR/foreign-payload.tar.gz" >/dev/null 2>&1; then
   die "validator accepted a macOS Mach-O payload"
+fi
+
+SCRIPT_STORE_ROOT="$WORK_DIR/script-payload/tarball"
+SCRIPT_STORE="$SCRIPT_STORE_ROOT/store/dddddddddddddddddddddddddddddddd-ios-wrapper"
+mkdir -p "$SCRIPT_STORE/bin" "$SCRIPT_STORE/share"
+printf '%s\n' '#!/bin/sh' 'exit 0' > "$SCRIPT_STORE/bin/nix-store"
+cp "$WORK_DIR/probe" "$SCRIPT_STORE/share/probe"
+printf '%s\n' '/var/jb/nix/store/dddddddddddddddddddddddddddddddd-ios-wrapper/bin/nix-store' \
+  > "$SCRIPT_STORE_ROOT/registration"
+printf '%s\n' '#!/bin/sh' 'exit 0' > "$SCRIPT_STORE_ROOT/install.sh"
+chmod +x "$SCRIPT_STORE/bin/nix-store" "$SCRIPT_STORE_ROOT/install.sh"
+tar -czf "$WORK_DIR/script-payload.tar.gz" -C "$WORK_DIR/script-payload" tarball
+if "$ROOT_DIR/ios/validate-payload.sh" \
+  "$WORK_DIR/script-payload.tar.gz" >/dev/null 2>&1; then
+  die "validator accepted a non-Mach-O bin/nix-store"
 fi
 
 echo "==> Testing bootstrap-only layout"
