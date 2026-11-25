@@ -1,0 +1,114 @@
+name: iOS Jailbreak Bootstrap
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/ios.yml"
+      - "flake.lock"
+      - "flake.nix"
+      - "ios/**"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/ios.yml"
+      - "flake.lock"
+      - "flake.nix"
+      - "ios/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-jailbreak-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  toolkit:
+    name: Package installer toolkit
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Build iOS installer toolkit
+        run: |
+          mkdir -p result
+          nix build .#ios-toolkit -L --out-link result/ios-toolkit
+          test -f result/ios-toolkit/nix-ios-toolkit.tar.gz
+          test -f result/ios-toolkit/checksums.txt
+
+      - name: Verify toolkit archive and scripts
+        run: |
+          tar -tzf result/ios-toolkit/nix-ios-toolkit.tar.gz
+          (
+            cd result/ios-toolkit
+            sha256sum -c checksums.txt
+          )
+          nix shell .#legacyPackages.x86_64-linux.shellcheck \
+            -c shellcheck ios/*.sh
+          nix shell .#legacyPackages.x86_64-linux.actionlint \
+            -c actionlint .github/workflows/ios.yml
+          nix shell .#legacyPackages.x86_64-linux.nixfmt \
+            -c nixfmt --check flake.nix ios/bootstrap.nix ios/toolkit.nix
+
+      - name: Upload iOS installer toolkit
+        uses: actions/upload-artifact@v4
+        with:
+          name: nix-ios-toolkit-${{ github.sha }}
+          path: |
+            result/ios-toolkit/nix-ios-toolkit.tar.gz
+            result/ios-toolkit/checksums.txt
+          if-no-files-found: error
+          retention-days: 30
+
+  apple-silicon-preflight:
+    name: Apple Silicon and iPhoneOS SDK preflight
+    runs-on: macos-15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Confirm arm64 runner
+        run: |
+          uname -m | grep -qx arm64
+
+      - name: Select current Xcode
+        run: |
+          sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
+          xcodebuild -version
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Run iOS build-host preflight
+        env:
+          NIX_IOS_ARTIFACT_DIR: ${{ github.workspace }}/ios-preflight
+        run: ./ios/ci-check.sh
+
+      - name: Evaluate iOS Nix attributes
+        run: |
+          nix eval --raw .#packages.aarch64-darwin.ios-nix-stage1.drvPath >/dev/null
+          KERNEL="$(nix eval --raw .#legacyPackages.aarch64-darwin.pkgsCross.iphone64.stdenv.hostPlatform.parsed.kernel.name)"
+          test "$KERNEL" = ios
+          echo "iPhone cross target kernel: $KERNEL"
+
+      - name: Upload iPhoneOS SDK probe
+        uses: actions/upload-artifact@v4
+        with:
+          name: nix-ios-preflight-${{ github.sha }}
+          path: ios-preflight/
+          if-no-files-found: error
+          retention-days: 14

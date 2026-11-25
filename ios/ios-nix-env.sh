@@ -12,11 +12,14 @@ export NIX_LOG_DIR="$NIX_PREFIX/var/log/nix"
 
 # SSL certificates (first cacert store path, if present)
 if [ -d "$NIX_STORE_DIR" ]; then
-  _cacert=$(ls "$NIX_STORE_DIR" 2>/dev/null | grep cacert | head -n 1)
-  if [ -n "$_cacert" ] && [ -f "$NIX_STORE_DIR/$_cacert/etc/ssl/certs/ca-bundle.crt" ]; then
-    export NIX_SSL_CERT_FILE="$NIX_STORE_DIR/$_cacert/etc/ssl/certs/ca-bundle.crt"
-  fi
-  unset _cacert
+  for _cacert_path in "$NIX_STORE_DIR"/*cacert*; do
+    [ -d "$_cacert_path" ] || continue
+    if [ -f "$_cacert_path/etc/ssl/certs/ca-bundle.crt" ]; then
+      export NIX_SSL_CERT_FILE="$_cacert_path/etc/ssl/certs/ca-bundle.crt"
+      break
+    fi
+  done
+  unset _cacert_path
 fi
 
 # Default profile on PATH

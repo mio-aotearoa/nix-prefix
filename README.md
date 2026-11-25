@@ -5,7 +5,7 @@ Run Nix and Home Manager where `/nix` on `/` is unavailable without root or `pro
 | Track | Platform | Store prefix | Docs |
 |---|---|---|---|
 | **Termux** (below) | Android Bionic (`aarch64` fixed `armv8.2-a`, `armv7l`, `x86_64` fixed `x86-64-v2`, `i686`) | `/data/data/com.termux/files/nix` | [`docs/architecture.md`](docs/architecture.md) |
-| **Rootless iOS** | iOS Darwin (`iphoneos` / `pkgsCross.iphone64`) | `/var/jb/nix` | [`ios/README.md`](ios/README.md) |
+| **Rootless iOS** | iOS Darwin (`iphoneos` / `pkgsCross.iphone64`) | `/var/jb/nix` | [`ios/README.md`](ios/README.md) (installer + CI ready; native closure blocked) |
 
 ## Quick Install (Termux)
 
@@ -76,7 +76,7 @@ nix build .#checks.x86_64-linux.vm-test -L
 - [**Architecture & dramforever Stage 1 → Stage 2 Bootstrap**](docs/architecture.md) — Pure prefixed store design (zero path-replacing hacks), `allStdenvStages`, directory layout, Home Manager integration.
 - [**Why Bionic & Fixed `armv8.2-a` ISA**](docs/bionic-and-isa.md) — Why Termux uses Android's Bionic C library instead of glibc and why `armv8.2-a` is fixed across the whole project for real-world Android phones.
 - [**Binary Caching, GitHub Pages Substituter & CI**](docs/caching-and-ci.md) — Cachix (`prefix.cachix.org`), GitHub Pages static `/data/data/com.termux/files/nix/store` substituter (`NIX_CACHE_PRIV_KEY`), and VM testing.
-- [**Rootless iOS Track (`/var/jb/nix`)**](ios/README.md) — Prefixed Nix for rootless jailbroken iOS.
+- [**Rootless iOS Track (`/var/jb/nix`)**](ios/README.md) — Transactional iOS installer, payload validator, signing helper, Apple Silicon CI; native Nix closure still blocked.
 - [**Non-Jailbroken iOS Native-Code Research**](ios/non-jailbroken-research.md) — Literature review of native-code near-native execution pathways (`LiveContainer` + `zsign` + `StikDebug`, `UTM + StikDebug` JIT, `TrollStore`).
 
 ## License

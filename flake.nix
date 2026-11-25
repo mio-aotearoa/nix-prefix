@@ -50,6 +50,7 @@
           pkgs = nixpkgs.legacyPackages.${system};
           isLinux = pkgs.stdenv.hostPlatform.isLinux;
           termuxBootstrap = import ./bootstrap.nix { inherit pkgs; };
+          iosToolkit = import ./ios/toolkit.nix { inherit pkgs; };
           bionicAarch64Pkgs = platforms.mkTermuxPkgs {
             nixpkgs = nixpkgs.outPath;
             localSystem = system;
@@ -57,7 +58,10 @@
           };
         in
         {
-          # Rootless iOS Stage-1 Nix and pure Stage-2 installer (host: aarch64-darwin)
+          # Device installer scripts and configuration, without a Nix closure.
+          ios-toolkit = iosToolkit;
+
+          # Rootless iOS Stage-1 driver and experimental host-closure payload (host: aarch64-darwin)
           ios-nix-stage1 =
             if system == "aarch64-darwin" then
               (import ./ios/bootstrap.nix { inherit pkgs; }).nixStage1
@@ -137,8 +141,11 @@
               cp probe $out/bin/probe
             '';
           };
+          iosToolkit = import ./ios/toolkit.nix { inherit pkgs; };
         in
         {
+          ios-toolkit = iosToolkit;
+
           vm-test = import ./tests/vm-test.nix {
             inherit pkgs;
             nixStage1 = termuxBootstrap.nixStage1;

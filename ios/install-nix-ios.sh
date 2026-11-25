@@ -1,25 +1,16 @@
 #!/usr/bin/env bash
-# Installer skeleton for Nix on rootless jailbroken iOS
-# (On device, ensure /var/jb/usr/bin is on PATH, or run: bash install-nix-ios.sh)
-#
-# Usage (on device, jailbreak active, /var/jb present):
-#   ./ios/install-nix-ios.sh
-#   # or after extracting a release tarball:
-#   ./install.sh
-#
-# Prefers a local tarball from nix-build (ios/bootstrap.nix -A installer).
-# Falls back to copying env + nix.conf templates for a manual bring-up.
+# Device-side entry point for rootless jailbroken iOS.
 
-set -e
+set -euo pipefail
 
-JB_PREFIX="/var/jb"
-NIX_PREFIX="${JB_PREFIX}/nix"
-STORE_DIR="${NIX_PREFIX}/store"
-STATE_DIR="${NIX_PREFIX}/var/nix"
-LOG_DIR="${NIX_PREFIX}/var/log/nix"
-CONF_DIR="${NIX_PREFIX}/etc/nix"
+JB_PREFIX="${NIX_IOS_JB_PREFIX:-/var/jb}"
+SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
+REPO_ROOT="$(CDPATH='' cd -- "${SCRIPT_DIR}/.." && pwd)"
 
-SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+ARCHIVE=""
+PAYLOAD_DIR=""
+BOOTSTRAP_ONLY=0
+SIGN_STORE="${NIX_IOS_SIGN:-0}"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -27,116 +18,138 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-info() { echo -e "${BLUE}==>${NC} $1"; }
-success() { echo -e "${GREEN}==>${NC} $1"; }
-warning() { echo -e "${YELLOW}Warning:${NC} $1"; }
-error() { echo -e "${RED}Error:${NC} $1" >&2; }
-die() { error "$1"; exit 1; }
+info() { printf '%b==>%b %s\n' "$BLUE" "$NC" "$1"; }
+success() { printf '%b==>%b %s\n' "$GREEN" "$NC" "$1"; }
+warning() { printf '%bWarning:%b %s\n' "$YELLOW" "$NC" "$1" >&2; }
+die() { printf '%bError:%b %s\n' "$RED" "$NC" "$1" >&2; exit 1; }
 
-echo ""
-echo "╔════════════════════════════════════════════╗"
-echo "║  Nix for rootless iOS (/var/jb/nix)       ║"
-echo "╚════════════════════════════════════════════╝"
-echo ""
+usage() {
+  cat <<EOF
+Usage: install-nix-ios.sh [options]
 
-info "Checking environment..."
+Options:
+  --archive PATH    Install from a built Nix iOS payload archive.
+  --payload-dir DIR Install from an extracted payload directory.
+  --bootstrap-only  Create the directory/config skeleton without Nix binaries.
+  --sign-store      Ad-hoc sign Mach-O files before database registration.
+  --help            Show this help.
 
-ARCH=$(uname -m)
-case "$ARCH" in
-  arm64|aarch64) ;;
-  *) die "aarch64/arm64 only (detected: $ARCH)" ;;
-esac
+Without --archive or --payload-dir, the installer looks for a payload beside
+this checkout or in result/. It refuses to install a legacy host-only payload.
 
-if [ ! -d "$JB_PREFIX" ] && [ ! -L "$JB_PREFIX" ]; then
-  die "$JB_PREFIX not found. Activate a rootless jailbreak first."
-fi
+Environment:
+  NIX_IOS_SHA256=HEX       Verify the archive before extraction.
+  NIX_IOS_SIGN=1           Same as --sign-store.
+  NIX_IOS_JB_PREFIX=PATH   Override /var/jb (intended for testing only).
+EOF
+}
 
-# Prefer executable path under the jb prefix when resolving tools
-if [ -x "${JB_PREFIX}/usr/bin/bash" ]; then
-  :
-fi
-
-success "Rootless prefix OK ($JB_PREFIX), arch=$ARCH"
-
-# If this script is inside an extracted bootstrap tarball, delegate to install.sh
-if [ -f "${SCRIPT_DIR}/install.sh" ] && [ -d "${SCRIPT_DIR}/store" ]; then
-  info "Found bootstrap tarball contents; running install.sh..."
-  exec "${SCRIPT_DIR}/install.sh"
-fi
-
-# If a built result tarball exists next to the repo checkout (dev workflow)
-REPO_ROOT=$(CDPATH= cd -- "${SCRIPT_DIR}/.." && pwd)
-TARBALL=""
-for candidate in \
-  "${REPO_ROOT}/result/nix-ios-jb-aarch64.tar.gz" \
-  "${REPO_ROOT}/result/tarball.tar.gz" \
-  "${SCRIPT_DIR}/nix-ios-jb-aarch64.tar.gz"
-do
-  if [ -f "$candidate" ]; then
-    TARBALL=$candidate
-    break
-  fi
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --archive)
+      [ "$#" -ge 2 ] || die "--archive needs a value"
+      ARCHIVE="$2"
+      shift 2
+      ;;
+    --payload-dir)
+      [ "$#" -ge 2 ] || die "--payload-dir needs a value"
+      PAYLOAD_DIR="$2"
+      shift 2
+      ;;
+    --bootstrap-only)
+      BOOTSTRAP_ONLY=1
+      shift
+      ;;
+    --sign-store)
+      SIGN_STORE=1
+      shift
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    *)
+      die "unknown option: $1"
+      ;;
+  esac
 done
 
-if [ -n "$TARBALL" ]; then
-  info "Extracting $TARBALL..."
-  TMP_DIR="${JB_PREFIX}/tmp/nix-install-$$"
-  mkdir -p "$TMP_DIR"
-  tar -xzf "$TARBALL" -C "$TMP_DIR"
-  if [ -f "$TMP_DIR/tarball/install.sh" ]; then
-    cd "$TMP_DIR/tarball"
-    exec ./install.sh
-  elif [ -f "$TMP_DIR/install.sh" ]; then
-    cd "$TMP_DIR"
-    exec ./install.sh
+echo ""
+echo "+--------------------------------------------+"
+echo "|  Nix for rootless iOS (/var/jb/nix)        |"
+echo "+--------------------------------------------+"
+echo ""
+
+info "Checking environment"
+[ "$(uname -s)" = "Darwin" ] || die "this installer must run on iOS/Darwin"
+case "$(uname -m)" in
+  arm64|aarch64) ;;
+  *) die "aarch64/arm64 only (detected: $(uname -m))" ;;
+esac
+[ -d "$JB_PREFIX" ] || [ -L "$JB_PREFIX" ] \
+  || die "$JB_PREFIX not found. Activate a rootless jailbreak first."
+success "Rootless prefix OK ($JB_PREFIX), arch=$(uname -m)"
+
+if [ "$BOOTSTRAP_ONLY" -eq 1 ]; then
+  exec "$SCRIPT_DIR/install-payload.sh" --bootstrap-only
+fi
+
+if [ -z "$PAYLOAD_DIR" ] && [ -z "$ARCHIVE" ]; then
+  for candidate in \
+    "$SCRIPT_DIR/nix-ios-jb-aarch64.tar.gz" \
+    "$SCRIPT_DIR/tarball.tar.gz" \
+    "$REPO_ROOT/result/nix-ios-jb-aarch64.tar.gz" \
+    "$REPO_ROOT/result/tarball.tar.gz"
+  do
+    if [ -f "$candidate" ]; then
+      ARCHIVE="$candidate"
+      break
+    fi
+  done
+fi
+
+if [ -z "$PAYLOAD_DIR" ] && [ -z "$ARCHIVE" ]; then
+  die "no Nix iOS payload found; pass --archive or use --bootstrap-only"
+fi
+
+if [ -n "$PAYLOAD_DIR" ]; then
+  [ -d "$PAYLOAD_DIR" ] || die "payload directory not found: $PAYLOAD_DIR"
+else
+  [ -f "$ARCHIVE" ] || die "payload archive not found: $ARCHIVE"
+
+  if [ -n "${NIX_IOS_SHA256:-}" ]; then
+    info "Verifying archive checksum"
+    actual="$(shasum -a 256 "$ARCHIVE" | awk '{print $1}')"
+    [ "$actual" = "$NIX_IOS_SHA256" ] \
+      || die "archive SHA-256 mismatch: expected $NIX_IOS_SHA256, got $actual"
+  fi
+
+  info "Inspecting archive"
+  entries="$(mktemp "${JB_PREFIX}/tmp.entries.XXXXXX")"
+  extract_dir="$(mktemp -d "${JB_PREFIX}/tmp.nix-install.XXXXXX")"
+  trap 'rm -f "$entries"; rm -rf "$extract_dir"' EXIT
+  tar -tzf "$ARCHIVE" > "$entries"
+  if grep -Eq '^/|(^|/)\.\.(/|$)' "$entries"; then
+    die "archive contains an absolute or parent-traversing path"
+  fi
+
+  info "Extracting payload"
+  tar -xzf "$ARCHIVE" -C "$extract_dir"
+  if [ -f "$extract_dir/tarball/install-payload.sh" ]; then
+    PAYLOAD_DIR="$extract_dir/tarball"
+  elif [ -f "$extract_dir/install-payload.sh" ]; then
+    PAYLOAD_DIR="$extract_dir"
   else
-    die "Tarball extracted but install.sh not found"
+    die "payload lacks install-payload.sh; legacy host-only archives are unsupported"
   fi
 fi
 
-# Skeleton / manual bring-up: directories + conf + env only (no store closure yet)
-warning "No installer tarball found."
-warning "Creating directory layout + config only (skeleton mode)."
-echo ""
-info "Build Stage 2 on an aarch64-darwin Mac first:"
-echo "  nix-build --store 'local?root=/tmp/ios-stage2&store=/var/jb/nix/store' ios/bootstrap.nix -A installer"
-echo "Then copy result/nix-ios-jb-aarch64.tar.gz to the device and re-run."
-echo ""
+[ -x "$SCRIPT_DIR/install-payload.sh" ] \
+  || die "install-payload.sh is missing or not executable"
 
-mkdir -p "$STORE_DIR"
-mkdir -p "$STATE_DIR/db"
-mkdir -p "$STATE_DIR/gcroots"
-mkdir -p "$STATE_DIR/profiles/per-user/${USER:-mobile}"
-mkdir -p "$STATE_DIR/temproots"
-mkdir -p "$LOG_DIR/drvs"
-mkdir -p "$CONF_DIR"
-
-if [ -f "${SCRIPT_DIR}/nix.conf.template" ]; then
-  cp "${SCRIPT_DIR}/nix.conf.template" "$CONF_DIR/nix.conf"
-  success "Installed nix.conf (allow-symlinked-store enabled)"
-else
-  cat > "$CONF_DIR/nix.conf" << 'EOF'
-build-users-group =
-sandbox = false
-allow-symlinked-store = true
-max-jobs = auto
-cores = 0
-substituters =
-trusted-public-keys =
-EOF
-  success "Wrote minimal nix.conf"
+args=(--payload-dir "$PAYLOAD_DIR")
+if [ "$SIGN_STORE" -eq 1 ]; then
+  args+=(--sign-store)
 fi
 
-cp "${SCRIPT_DIR}/ios-nix-env.sh" "$CONF_DIR/ios-nix-env.sh"
-chmod 644 "$CONF_DIR/ios-nix-env.sh"
-
-ln -sfn "$STATE_DIR/profiles/per-user/${USER:-mobile}/profile" \
-  "$STATE_DIR/profiles/default" || true
-
-success "Skeleton layout ready under $NIX_PREFIX"
-echo ""
-echo "Next:"
-echo "  source $CONF_DIR/ios-nix-env.sh"
-echo "  # then install a real store closure from the bootstrap tarball"
-echo ""
-echo "Remember: binaries need iOS-appropriate linkage and ad-hoc codesign."
+"$SCRIPT_DIR/install-payload.sh" "${args[@]}"
