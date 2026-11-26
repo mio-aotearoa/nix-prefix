@@ -78,6 +78,7 @@ nix build .#checks.x86_64-linux.vm-test -L
 - [**Binary Caching, GitHub Pages Substituter & CI**](docs/caching-and-ci.md) — Cachix (`prefix.cachix.org`), GitHub Pages static `/data/data/com.termux/files/nix/store` substituter (`NIX_CACHE_PRIV_KEY`), and VM testing.
 - [**Rootless iOS Track (`/var/jb/nix`)**](ios/README.md) — Transactional iOS installer, payload validator, signing helper, Apple Silicon CI; native Nix closure still blocked.
 - [**Non-Jailbroken iOS Native-Code Research**](ios/non-jailbroken-research.md) — Literature review of native-code near-native execution pathways (`LiveContainer` + `zsign` + `StikDebug`, `UTM + StikDebug` JIT, `TrollStore`).
+- [**vphone-cli iOS Nix Validation Plan**](docs/vphone-ios-test-plan.md) — Local virtual-iPhone test plan for future rootless iOS Mach-O closures, including host, storage, bootstrap, installation, and smoke-test criteria.
 
 ## License
 
