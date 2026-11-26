@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Enable KVM access for NixOS VM test
         run: |
@@ -23,14 +23,14 @@ jobs:
           fi
 
       - name: Install Nix
-        uses: cachix/install-nix-action@v31
+        uses: cachix/install-nix-action@v32
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
             system-features = nixos-test benchmark big-parallel kvm
 
       - name: Setup Cachix (prefix)
-        uses: cachix/cachix-action@v15
+        uses: cachix/cachix-action@v17
         with:
           name: prefix
           authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
@@ -56,16 +56,34 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+
+      # The Stage-2 closure can exceed the runner image's 14 GB SSD allowance.
+      # Reclaim unused SDK/runtime payloads before compiling the multi-stage
+      # Android toolchain.
+      - name: Free runner disk space
+        run: |
+          sudo rm -rf \
+            /usr/local/lib/android \
+            /usr/share/dotnet \
+            /opt/ghc \
+            /usr/local/.ghcup \
+            /opt/hostedtoolcache/CodeQL
+          sudo apt-get clean
+          df -h /
 
       - name: Install Nix
-        uses: cachix/install-nix-action@v31
+        uses: cachix/install-nix-action@v32
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
+            # Limit concurrent compiler pressure on the 16 GB hosted runner
+            # while still using all four vCPUs.
+            max-jobs = 2
+            cores = 2
 
       - name: Setup Cachix (prefix)
-        uses: cachix/cachix-action@v15
+        uses: cachix/cachix-action@v17
         with:
           name: prefix
           authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
@@ -90,7 +108,7 @@ jobs:
         id: version
         run: |
           VERSION="$(date +%Y%m%d-%H%M%S)-${GITHUB_SHA::7}"
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Building version: $VERSION"
 
       - name: Verify tarball
@@ -112,7 +130,7 @@ jobs:
           cat "checksums-${{ matrix.artifact_suffix }}.txt"
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: nix-termux-installer-${{ matrix.artifact_suffix }}-${{ steps.version.outputs.version }}
           path: |
@@ -129,17 +147,17 @@ jobs:
       contents: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Get version from commit
         id: version
         run: |
           VERSION="$(date +%Y%m%d-%H%M%S)-${GITHUB_SHA::7}"
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Building version: $VERSION"
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
           merge-multiple: false
@@ -152,7 +170,7 @@ jobs:
           ls -la release-files/
 
       - name: Create release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.version.outputs.version }}
           name: ${{ steps.version.outputs.version }}

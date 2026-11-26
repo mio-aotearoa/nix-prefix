@@ -43,6 +43,13 @@ STATE_DIR="${NIX_PREFIX}/var/nix"
 LOG_DIR="${NIX_PREFIX}/var/log/nix"
 mkdir -p "$OUT_DIR/$ARCH"
 
+show_disk_usage() {
+  df -h "$PWD"
+  if [ -d "$STORE_DIR" ]; then
+    df -h "$STORE_DIR"
+  fi
+}
+
 if [ "$DIRECT_MODE" = "auto" ]; then
   if [ -d "$NIX_PREFIX" ] && [ -w "$NIX_PREFIX" ]; then
     DIRECT_MODE="yes"
@@ -87,6 +94,7 @@ echo "  Store URI:  $STORE_URI"
 echo "  Target:     $ARCH (Android Bionic, fixed ISA)"
 echo "  Nixpkgs:    $NIXPKGS_PATH"
 echo "============================================================"
+show_disk_usage
 
 NIX_BUILD_BIN="nix-build"
 if [ "$DIRECT_MODE" = "yes" ] && [ -x "$OUT_DIR/nix-stage1/bin/nix-build" ]; then
@@ -108,19 +116,42 @@ python3 scripts/seed-stage2-fods.py \
   --nixpkgs "$NIXPKGS_PATH" \
   --scope all
 
+echo "Disk space after Stage-2 source seeding:"
+show_disk_usage
+
+BUILD_LOG="$OUT_DIR/$ARCH/build.log"
 set +e
 "$NIX_BUILD_BIN" --store "$STORE_URI" \
   "${NIX_BUILD_OPTS[@]}" \
   "$STAGE2_DRV" \
-  -o "$OUT_DIR/$ARCH/installer" 2>&1 | tee "$OUT_DIR/$ARCH/build.log"
+  -o "$OUT_DIR/$ARCH/installer" 2>&1 | tee "$BUILD_LOG"
 BUILD_RC="${PIPESTATUS[0]}"
 set -e
 
 if [ "$BUILD_RC" -ne 0 ]; then
+  FAILURE_EXCERPT="$(
+    grep -n -B 2 -A 35 "Reason: builder failed" "$BUILD_LOG" | tail -n 120 || true
+  )"
+  if [ -z "$FAILURE_EXCERPT" ]; then
+    FAILURE_EXCERPT="$(tail -n 120 "$BUILD_LOG")"
+  fi
+
   echo ""
   echo "================ ROOT-CAUSE BUILDER FAILURES ================"
-  grep -n -B 2 -A 35 "Reason: builder failed" "$OUT_DIR/$ARCH/build.log" | tail -n 120 || true
+  printf '%s\n' "$FAILURE_EXCERPT"
   echo "============================================================="
+  show_disk_usage || true
+
+  if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+    {
+      echo "## Stage-2 build failed (\`$ARCH\`)"
+      echo ""
+      echo '````text'
+      printf '%s\n' "$FAILURE_EXCERPT"
+      echo '````'
+    } >> "$GITHUB_STEP_SUMMARY"
+  fi
+
   exit "$BUILD_RC"
 fi
 

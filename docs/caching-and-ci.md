@@ -35,6 +35,8 @@ A Nix HTTP binary cache is purely static files (`nix-cache-info`, `<hash>.narinf
 
 > **Limits:** GitHub Pages has a 1 GB soft site limit — well suited for a curated starter Bionic closure. For a multi-GB full nixpkgs binary cache, use Cloudflare R2, S3, or Attic advertising `StoreDir: /data/data/com.termux/files/nix/store`.
 
+The Stage-2 build can exceed the standard GitHub-hosted Linux runner's 14 GB SSD allowance. Both cache-producing workflows therefore remove unused preinstalled Android, .NET, Haskell, and CodeQL payloads before installing Nix. They also set `max-jobs = 2` and `cores = 2`, limiting compiler concurrency on the runner's 16 GB of RAM.
+
 ---
 
 ## 3. Automated QEMU/KVM VM Test
